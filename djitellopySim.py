@@ -52,7 +52,7 @@ class Tello:
         self.drone["rot"] = 0
 
         # Set the speed of the sprite (in pixels per second)
-        self.drone["speed"] = 500
+        self.drone["speed"] = 100
 
         self.is_flying = False
         self.is_windy = True
@@ -72,8 +72,16 @@ class Tello:
             )
         )
 
-    def update_visual(self, windAmt=0.01):
-        running = True
+    def event_loop(self):
+        # Handle events
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                self.running = False
+            else:
+                pass
+
+    def update_visual(self, windAmt=0.3):
+        self.running = True
         clock = pygame.time.Clock()
 
         noise_x = 0
@@ -81,7 +89,7 @@ class Tello:
         noise_z = 0
         noise_t = 0
 
-        while running:
+        while self.running:
             # Update the Pygame visual based on the attributes
             with self.lock:
                 self.dt = clock.tick(60) / 1000.0
@@ -94,10 +102,13 @@ class Tello:
                     self.drone["pos"][2] += noise_z * 0.01
                     self.drone["rot"] += noise_t * 0.03
 
-                    noise_x += uniform(-windAmt, windAmt)
-                    noise_y += uniform(-windAmt, windAmt)
-                    noise_z += uniform(-windAmt, windAmt)
-                    noise_t += uniform(-windAmt, windAmt)
+                    if self.drone["pos"][2] < 1:
+                        self.drone["pos"][2] = 1
+
+                    noise_x = uniform(-windAmt, windAmt) + noise_x / 2
+                    noise_y = uniform(-windAmt, windAmt) + noise_y / 2
+                    noise_z = uniform(-windAmt, windAmt) + noise_z / 2
+                    noise_t = uniform(-windAmt, windAmt) + noise_t / 2
 
             with self.lock:
                 # Clear the screen
@@ -133,13 +144,6 @@ class Tello:
                 # Update the display
                 pygame.display.flip()
 
-            # Handle events
-            for event in pygame.event.get():
-                if event.type == pygame.QUIT:
-                    running = False
-                else:
-                    pass
-
             # Delay the next frame
             pygame.time.delay(1000 // 60)
 
@@ -160,14 +164,16 @@ class Tello:
 
     def takeoff(self):
         Tello.LOGGER.info("sending takoff command to drone")
+        self.event_loop()
         self.simLat(max=6)
         # take off drone
         with self.lock:
             current_height = self.drone["pos"][2]
+
         target_height = 1.5
 
         height_diff = target_height - current_height
-        steps = int(max(self.drone["speed"] // height_diff * 60, 1))
+        steps = int(max(abs(height_diff * 100 / self.drone["speed"] * 60), 1))
         delta_height = height_diff / steps
         with self.lock:
             self.is_flying = True
@@ -178,13 +184,14 @@ class Tello:
 
     def land(self):
         Tello.LOGGER.info("sending land command to drone")
+        self.event_loop()
         self.simLat()
         # Land the drone by gradually decreasing its z position to 1.0
         target_height = 1.0
         with self.lock:
             current_height = self.drone["pos"][2]
         height_diff = target_height - current_height
-        steps = int(max(self.drone["speed"] // height_diff * 60, 1))
+        steps = int(max(abs(height_diff * 100 / self.drone["speed"] * 60), 1))
         delta_height = height_diff / steps
         for _ in range(steps):
             with self.lock:
@@ -197,7 +204,7 @@ class Tello:
         Tello.LOGGER.info(
             f"sending move command to drone in direction {direction} by {x}"
         )
-
+        self.event_loop()
         with self.lock:
             if not self.is_flying:
                 raise TelloException("Drone is not flying!")
@@ -234,29 +241,32 @@ class Tello:
                 target_x = current_x - x * sin(angle_rad)
                 target_y = current_y - x * cos(angle_rad)
             case "up":
+                x /= 100
                 target_z = current_z + x
             case "down":
+                x /= 100
                 target_z = current_z - x
 
         diff_x = current_x - target_x
         diff_y = current_y - target_y
-        diff_z = current_z - target_z
-        maxDiff = max(diff_x, diff_y, diff_z)
-        steps = int(max(self.drone["speed"] // maxDiff * 60, 1))
+        diff_z = target_z - current_z
+        maxDiff = max(abs(diff_x), abs(diff_y), abs(diff_z) * 100)
+        steps = int(max(maxDiff / self.drone["speed"] * 60, 1))
         delta_x = diff_x / steps
         delta_y = diff_y / steps
         delta_z = diff_z / steps
         for _ in range(steps):
             with self.lock:
-                self.drone["pos"][0] = current_x + delta_x
-                self.drone["pos"][1] = current_y + delta_y
-                self.drone["pos"][2] = current_z + delta_z
+                self.drone["pos"][0] += delta_x
+                self.drone["pos"][1] += delta_y
+                self.drone["pos"][2] += delta_z
             pygame.time.delay(1000 // 60)
 
     def rotate(self, direction: str, x: int):
         Tello.LOGGER.info(
             f"sending rotate command to drone in direction {direction} by {x} degrees"
         )
+        self.event_loop()
         with self.lock:
             if not self.is_flying:
                 raise TelloException("Drone is not flying!")
@@ -269,7 +279,7 @@ class Tello:
             case "ccw":
                 x = -x
 
-        steps = int(max(self.drone["speed"] // x * 60, 1))
+        steps = int(max(abs(x / 90 * 60), 1))
         delta_x = x / steps
         for i in range(steps):
             with self.lock:
