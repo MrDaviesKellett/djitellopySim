@@ -23,7 +23,7 @@ basic
 
 ## Usage
 
-To use the DJI Tello Simulator, simply run the test.py file. You can then use the same commands as the real drone to control the simulation. For example, to make the drone take off, you would call the takeoff() method. To make the drone move forward, you would call the move_forward() method.
+To use the DJI Tello Simulator, simply run the test.py file. You can then use the same commands as the real drone to control the simulation. For example, to make the drone take off, you would call the `takeoff()` method. To make the drone move forward, you would call the `move_forward()` method.
 
 For more information on how to use the simulator, please refer to the documentation for the DJI Tello SDK.
 
@@ -34,7 +34,3 @@ If you encounter any issues with the simulator, please check the GitHub issue tr
 ## Contributing
 
 We welcome contributions from the community! Please see the contributing guidelines for more information on how to contribute.
-
-## License
-
-The DJI Tello Simulator is licensed under the MIT license. Please see the LICENSE file for more information.
