@@ -11,7 +11,7 @@ This is a Python-based simulator for the DJI Tello drone. The simulator allows y
 
 ## Requirements
 
-- Python 3.7 or higher
+- Python 3.10 or higher
 - Pygame library
 
 ## Installation
