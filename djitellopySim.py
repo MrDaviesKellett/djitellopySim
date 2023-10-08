@@ -33,7 +33,7 @@ class Tello:
     LOGGER.setLevel(logging.DEBUG)
 
     def __init__(self, host=TELLO_IP):
-        self.flight_path_taken = []
+        self.flightPathTaken = []
         self.address = (host, Tello.CONTROL_UDP_PORT)
         self.drone = {}
 
@@ -113,15 +113,15 @@ class Tello:
                     noise_z = uniform(-windAmt, windAmt) + noise_z / 2
                     noise_t = uniform(-windAmt, windAmt) + noise_t / 2
 
-            self.flight_path_taken.append(tuple(self.drone["pos"]))
+            self.flightPathTaken.append(tuple(self.drone["pos"]))
 
             with self.lock:
                 # Clear the screen
-                self.screen.fill((255, 255, 255))
+                self.screen.fill((0, 0, 0))
 
                 if SHOW_TRAILS:
-                    for path in self.flight_path_taken:
-                        pygame.draw.rect(self.screen, (100, 100, 100), pygame.Rect(path[0], path[1], 2, 2))
+                    for path in self.flightPathTaken:
+                        pygame.draw.rect(self.screen, (200, 200, 200), pygame.Rect(path[0], path[1], 2, 2))
 
                 # Draw the sprite
                 scaled_sprite = pygame.transform.scale(
