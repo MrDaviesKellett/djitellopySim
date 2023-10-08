@@ -52,10 +52,11 @@ class Tello:
         self.drone["rot"] = 0
 
         # Set the speed of the sprite (in pixels per second)
-        self.drone["speed"] = 100
+        self.drone["speed"] = 200
 
         self.is_flying = False
         self.is_windy = True
+        self.simLat = True
 
         # Create a lock to synchronize access to the attributes
         self.lock = threading.Lock()
@@ -150,22 +151,24 @@ class Tello:
     def connect(self, wait_for_state=True):
         # Connect to the Tello drone (you can simulate this by initializing your Pygame environment)
         if wait_for_state:
-            t = randint(1, 20)
+            t = randint(1, 5)
             for _ in range(t):
                 pygame.time.delay(1000 // 60)
             Tello.LOGGER.debug(
                 "'.connect()' received first state packet after {} seconds".format(t)
             )
 
-    def simLat(self, min=0.1, max=3):
+    def simLat(self, min=0.1, max=1):
         # wait a random amount of time
+        if self.simLat == False:
+            return False
         waitTime = int(uniform(min, max) * 1000)
         pygame.time.delay(waitTime)
 
     def takeoff(self):
         Tello.LOGGER.info("sending takoff command to drone")
         self.event_loop()
-        self.simLat(max=6)
+        self.simLat(max=3)
         # take off drone
         with self.lock:
             current_height = self.drone["pos"][2]
@@ -279,7 +282,7 @@ class Tello:
             case "ccw":
                 x = -x
 
-        steps = int(max(abs(x / 90 * 60), 1))
+        steps = int(max(abs(x / self.drone["speed"] * 60), 1))
         delta_x = x / steps
         for i in range(steps):
             with self.lock:
