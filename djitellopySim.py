@@ -52,11 +52,11 @@ class Tello:
         self.drone["rot"] = 0
 
         # Set the speed of the sprite (in pixels per second)
-        self.drone["speed"] = 200
+        self.drone["speed"] = 400
 
         self.is_flying = False
         self.is_windy = True
-        self.simLat = True
+        self.is_latency = True
 
         # Create a lock to synchronize access to the attributes
         self.lock = threading.Lock()
@@ -160,7 +160,7 @@ class Tello:
 
     def simLat(self, min=0.1, max=1):
         # wait a random amount of time
-        if self.simLat == False:
+        if self.is_latency == False:
             return False
         waitTime = int(uniform(min, max) * 1000)
         pygame.time.delay(waitTime)
