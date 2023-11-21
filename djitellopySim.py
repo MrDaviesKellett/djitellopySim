@@ -5,10 +5,24 @@ from time import sleep
 from random import randint, uniform
 from math import cos, sin, radians, pi
 
-
+IMAGE = pygame.image.load("tello.png")
 SHOW_TRAILS = True
+GRID = 0
 PI = pi
 
+class Simulation:
+
+    def __init__(self):
+        # Initialize Pygame
+        pygame.init()
+
+        # Set up the display
+        self.width = 800
+        self.height = 600
+        self.screen = pygame.display.set_mode((self.width, self.height))
+        pygame.display.set_caption("Tello Simulation")
+
+SIMULATION = Simulation()
 
 class TelloException(Exception):
     pass
@@ -37,21 +51,14 @@ class Tello:
         self.address = (host, Tello.CONTROL_UDP_PORT)
         self.drone = {}
 
-        # Initialize Pygame
-        pygame.init()
-
-        # Set up the display
-        self.width = 800
-        self.height = 600
-        self.screen = pygame.display.set_mode((self.width, self.height))
-        pygame.display.set_caption("Tello Simulation")
+        self.simulation = SIMULATION
 
         # Load the sprite image
-        self.drone["img"] = pygame.image.load("tello.png")
+        self.drone["img"] = IMAGE
         self.drone["imgScl"] = 0.08
 
         # Set the initial position, scale, and rotation
-        self.drone["pos"] = [self.width / 2, self.height / 2, 1.0]
+        self.drone["pos"] = [self.simulation.width / 2, self.simulation.height / 2, 1.0]
         self.drone["rot"] = 0
 
         # Set the speed of the sprite (in pixels per second)
@@ -117,11 +124,17 @@ class Tello:
 
             with self.lock:
                 # Clear the screen
-                self.screen.fill((0, 0, 0))
+                self.simulation.screen.fill((0, 0, 0))
 
                 if SHOW_TRAILS:
                     for path in self.flightPathTaken:
-                        pygame.draw.rect(self.screen, (200, 200, 200), pygame.Rect(path[0], path[1], 2, 2))
+                        pygame.draw.rect(self.simulation.screen, (200, 200, 200), pygame.Rect(path[0], path[1], 2, 2))
+
+                if GRID:
+                    for x in range(0, self.simulation.width, GRID):
+                        for y in range(0, self.simulation.height, GRID):
+                            pygame.draw.rect(self.simulation.screen, (100, 100, 100), pygame.Rect(x, y, GRID, GRID), 1)
+
 
                 # Draw the sprite
                 scaled_sprite = pygame.transform.scale(
@@ -142,7 +155,7 @@ class Tello:
                 rotated_sprite = pygame.transform.rotate(
                     scaled_sprite, self.drone["rot"]
                 )
-                self.screen.blit(
+                self.simulation.screen.blit(
                     rotated_sprite,
                     (
                         self.drone["pos"][0] - rotated_sprite.get_width() / 2,
@@ -327,3 +340,6 @@ class Tello:
     def rotate_counter_clockwise(self, x):
         # Simulate rotating the tello clockwise by `x` amount.
         self.rotate("ccw", x)
+
+
+
