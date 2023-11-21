@@ -1,5 +1,4 @@
 from djitellopySim import Tello
-from time import sleep
 
 myTello = Tello()
 myTello.takeoff()
