@@ -1,28 +1,15 @@
-import pygame
 import logging
-import threading
-from time import sleep
+import time
 from random import randint, uniform
 from math import cos, sin, radians, pi
+from threading import Thread, Barrier
+from queue import Queue
+from typing import List, Callable
+from physicsSim import sim
 
-IMAGE = pygame.image.load("tello.png")
-SHOW_TRAILS = True
-GRID = 0
 PI = pi
 
-class Simulation:
-
-    def __init__(self):
-        # Initialize Pygame
-        pygame.init()
-
-        # Set up the display
-        self.width = 800
-        self.height = 600
-        self.screen = pygame.display.set_mode((self.width, self.height))
-        pygame.display.set_caption("Tello Simulation")
-
-SIMULATION = Simulation()
+SIMULATION = sim()
 
 class TelloException(Exception):
     pass
@@ -46,16 +33,14 @@ class Tello:
     LOGGER.addHandler(HANDLER)
     LOGGER.setLevel(logging.DEBUG)
 
-    def __init__(self, host=TELLO_IP):
+    def __init__(self, host=TELLO_IP, swarm = False):
         self.flightPathTaken = []
         self.address = (host, Tello.CONTROL_UDP_PORT)
         self.drone = {}
 
         self.simulation = SIMULATION
 
-        # Load the sprite image
-        self.drone["img"] = IMAGE
-        self.drone["imgScl"] = 0.08
+        self.drone["scl"] = 0.08
 
         # Set the initial position, scale, and rotation
         self.drone["pos"] = [self.simulation.width / 2, self.simulation.height / 2, 1.0]
@@ -63,18 +48,13 @@ class Tello:
 
         # Set the speed of the sprite (in pixels per second)
         self.drone["speed"] = 400
+        self.drone["flip"] = 0
+        self.drone["led"] = (0, 0, 0)
+        self.swarm = swarm
 
         self.is_flying = False
         self.is_windy = True
         self.is_latency = True
-
-        # Create a lock to synchronize access to the attributes
-        self.lock = threading.Lock()
-
-        # Create a thread to update the Pygame visual in the background
-        self.update_thread = threading.Thread(target=self.update_visual)
-        self.update_thread.daemon = True  # Set the thread as a daemon to automatically exit when the main program ends
-        self.update_thread.start()
 
         # message as given by actual Tello class.
         self.LOGGER.info(
@@ -82,172 +62,81 @@ class Tello:
                 host, Tello.CONTROL_UDP_PORT
             )
         )
+        self.simulation.register(self)
+        if swarm is False:
+            self.simulation.event_loop()
 
-    def event_loop(self):
-        # Handle events
-        for event in pygame.event.get():
-            if event.type == pygame.QUIT:
-                self.running = False
-            else:
-                pass
+    def _setSwarmPos(self, i):
+        self.drone["pos"][0] += - 260 + 130 * (i % 4)
+        self.drone["pos"][1] += - 260 + 130 * (i // 4)
 
-    def update_visual(self, windAmt=0.3):
-        self.running = True
-        clock = pygame.time.Clock()
-
-        noise_x = 0
-        noise_y = 0
-        noise_z = 0
-        noise_t = 0
-
-        while self.running:
-            # Update the Pygame visual based on the attributes
-            with self.lock:
-                self.dt = clock.tick(60) / 1000.0
-
-            # add some random noise to the drone:
-            with self.lock:
-                if self.is_flying and self.is_windy:
-                    self.drone["pos"][0] += noise_x
-                    self.drone["pos"][1] += noise_y
-                    self.drone["pos"][2] += noise_z * 0.01
-                    self.drone["rot"] += noise_t * 0.03
-
-                    if self.drone["pos"][2] < 1:
-                        self.drone["pos"][2] = 1
-
-                    noise_x = uniform(-windAmt, windAmt) + noise_x / 2
-                    noise_y = uniform(-windAmt, windAmt) + noise_y / 2
-                    noise_z = uniform(-windAmt, windAmt) + noise_z / 2
-                    noise_t = uniform(-windAmt, windAmt) + noise_t / 2
-
-            self.flightPathTaken.append(tuple(self.drone["pos"]))
-
-            with self.lock:
-                # Clear the screen
-                self.simulation.screen.fill((0, 0, 0))
-
-                if SHOW_TRAILS:
-                    for path in self.flightPathTaken:
-                        pygame.draw.rect(self.simulation.screen, (200, 200, 200), pygame.Rect(path[0], path[1], 2, 2))
-
-                if GRID:
-                    for x in range(0, self.simulation.width, GRID):
-                        for y in range(0, self.simulation.height, GRID):
-                            pygame.draw.rect(self.simulation.screen, (100, 100, 100), pygame.Rect(x, y, GRID, GRID), 1)
-
-
-                # Draw the sprite
-                scaled_sprite = pygame.transform.scale(
-                    self.drone["img"],
-                    (
-                        int(
-                            self.drone["pos"][2]
-                            * self.drone["img"].get_width()
-                            * self.drone["imgScl"]
-                        ),
-                        int(
-                            self.drone["pos"][2]
-                            * self.drone["img"].get_height()
-                            * self.drone["imgScl"]
-                        ),
-                    ),
-                )
-                rotated_sprite = pygame.transform.rotate(
-                    scaled_sprite, self.drone["rot"]
-                )
-                self.simulation.screen.blit(
-                    rotated_sprite,
-                    (
-                        self.drone["pos"][0] - rotated_sprite.get_width() / 2,
-                        self.drone["pos"][1] - rotated_sprite.get_height() / 2,
-                    ),
-                )
-
-
-                # Update the display
-                pygame.display.flip()
-
-            # Delay the next frame
-            pygame.time.delay(1000 // 60)
 
     def connect(self, wait_for_state=True):
-        # Connect to the Tello drone (you can simulate this by initializing your Pygame environment)
+        # Connect to the Tello drone
         if wait_for_state:
-            t = randint(1, 5)
-            for _ in range(t):
-                pygame.time.delay(1000 // 60)
+            t = randint(1, 5) / 5
+            time.sleep(t)
             Tello.LOGGER.debug(
                 "'.connect()' received first state packet after {} seconds".format(t)
             )
 
-    def simLat(self, min=0.1, max=1):
+    def simLat(self, min=0.1, max=0.5):
         # wait a random amount of time
         if self.is_latency == False:
             return False
-        waitTime = int(uniform(min, max) * 1000)
-        pygame.time.delay(waitTime)
+        waitTime = uniform(min, max)
+        time.sleep(waitTime)
 
     def takeoff(self):
         Tello.LOGGER.info("sending takoff command to drone")
-        self.event_loop()
-        self.simLat(max=3)
-        # take off drone
-        with self.lock:
-            current_height = self.drone["pos"][2]
+        self.simLat()
+        current_height = self.drone["pos"][2]
 
         target_height = 1.5
 
         height_diff = target_height - current_height
         steps = int(max(abs(height_diff * 100 / self.drone["speed"] * 60), 1))
         delta_height = height_diff / steps
-        with self.lock:
-            self.is_flying = True
+        self.is_flying = True
+        
         for _ in range(steps):
-            with self.lock:
-                self.drone["pos"][2] += delta_height
-            pygame.time.delay(1000 // 60)
+            self.drone["pos"][2] += delta_height
+            time.sleep(0.01)
 
     def land(self):
         Tello.LOGGER.info("sending land command to drone")
-        self.event_loop()
         self.simLat()
         # Land the drone by gradually decreasing its z position to 1.0
         target_height = 1.0
-        with self.lock:
-            current_height = self.drone["pos"][2]
+        current_height = self.drone["pos"][2]
         height_diff = target_height - current_height
         steps = int(max(abs(height_diff * 100 / self.drone["speed"] * 60), 1))
         delta_height = height_diff / steps
         for _ in range(steps):
-            with self.lock:
-                self.drone["pos"][2] += delta_height
-            pygame.time.delay(1000 // 60)
-        with self.lock:
-            self.is_flying = False
+            self.drone["pos"][2] += delta_height
+            time.sleep(0.01)
+        self.is_flying = False
+        if self.swarm is False:
+            self.simulation.quit()
 
     def move(self, direction: str, x: int):
         Tello.LOGGER.info(
             f"sending move command to drone in direction {direction} by {x}"
         )
-        self.event_loop()
-        with self.lock:
-            if not self.is_flying:
-                raise TelloException("Drone is not flying!")
+        if not self.is_flying:
+            raise TelloException("Drone is not flying!")
 
         self.simLat()
 
-        with self.lock:
-            current_x = self.drone["pos"][0]
-            current_y = self.drone["pos"][1]
-            current_z = self.drone["pos"][2]
+        current_x = self.drone["pos"][0]
+        current_y = self.drone["pos"][1]
+        current_z = self.drone["pos"][2]
 
         target_x = current_x
         target_y = current_y
         target_z = current_z
 
-        with self.lock:
-            angle_rad = radians(self.drone["rot"])
+        angle_rad = radians(self.drone["rot"])
 
         match direction:
             case "forward":
@@ -257,15 +146,13 @@ class Tello:
                 target_x = current_x - x * sin(angle_rad)
                 target_y = current_y - x * cos(angle_rad)
             case "left":
-                with self.lock:
-                    angle_rad = radians(self.drone["rot"] + 90)
+                angle_rad = radians(self.drone["rot"] - 90)
                 target_x = current_x + x * sin(angle_rad)
                 target_y = current_y + x * cos(angle_rad)
             case "right":
-                with self.lock:
-                    angle_rad = radians(self.drone["rot"] + 90)
-                target_x = current_x - x * sin(angle_rad)
-                target_y = current_y - x * cos(angle_rad)
+                angle_rad = radians(self.drone["rot"] + 90)
+                target_x = current_x + x * sin(angle_rad)
+                target_y = current_y + x * cos(angle_rad)
             case "up":
                 x /= 100
                 target_z = current_z + x
@@ -273,8 +160,8 @@ class Tello:
                 x /= 100
                 target_z = current_z - x
 
-        diff_x = current_x - target_x
-        diff_y = current_y - target_y
+        diff_x = target_x - current_x
+        diff_y = target_y - current_y
         diff_z = target_z - current_z
         maxDiff = max(abs(diff_x), abs(diff_y), abs(diff_z) * 100)
         steps = int(max(maxDiff / self.drone["speed"] * 60, 1))
@@ -282,20 +169,18 @@ class Tello:
         delta_y = diff_y / steps
         delta_z = diff_z / steps
         for _ in range(steps):
-            with self.lock:
-                self.drone["pos"][0] += delta_x
-                self.drone["pos"][1] += delta_y
-                self.drone["pos"][2] += delta_z
-            pygame.time.delay(1000 // 60)
+            self.drone["pos"][0] += delta_x
+            self.drone["pos"][1] += delta_y
+            self.drone["pos"][2] += delta_z
+            time.sleep(0.01)
 
     def rotate(self, direction: str, x: int):
         Tello.LOGGER.info(
             f"sending rotate command to drone in direction {direction} by {x} degrees"
         )
-        self.event_loop()
-        with self.lock:
-            if not self.is_flying:
-                raise TelloException("Drone is not flying!")
+        
+        if not self.is_flying:
+            raise TelloException("Drone is not flying!")
 
         self.simLat()
 
@@ -308,9 +193,26 @@ class Tello:
         steps = int(max(abs(x / self.drone["speed"] * 60), 1))
         delta_x = x / steps
         for i in range(steps):
-            with self.lock:
-                self.drone["rot"] -= delta_x
-            pygame.time.delay(1000 // 60)
+            self.drone["rot"] -= delta_x
+            time.sleep(0.01)
+
+    def flip(self, direction: str):
+        Tello.LOGGER.info(
+            f"sending flip command to drone in direction {direction}"
+        )
+        self.drone["flip"] = 24
+
+    def flip_left(self):
+        self.flip("l")
+
+    def flip_right(self):
+        self.flip("r")
+    
+    def flip_forward(self):
+        self.flip("f")
+
+    def flip_back(self):
+        self.flip("b")
 
     def move_forward(self, x):
         # Simulate moving the tello forward by `x` amount.
@@ -344,5 +246,164 @@ class Tello:
         # Simulate rotating the tello clockwise by `x` amount.
         self.rotate("ccw", x)
 
+    def send_command_without_return(self, cmd):
+        c = cmd.split()
+        if c[0] == "EXT" and c[1] == "led":
+            self.drone["led"] = (int(c[2]), int(c[3]), int(c[4]))
+        else:
+            pass
 
+class TelloSwarm:
+    """Swarm library for controlling multiple Tellos simultaneously
+    """
 
+    @staticmethod
+    def fromFile(path: str):
+        """Create TelloSwarm from file. The file should contain one IP address per line.
+
+        Arguments:
+            path: path to the file
+        """
+        with open(path, 'r') as fd:
+            ips = fd.readlines()
+
+        return TelloSwarm.fromIps(ips)
+
+    @staticmethod
+    def fromIps(ips: list):
+        """Create TelloSwarm from a list of IP addresses.
+
+        Arguments:
+            ips: list of IP Addresses
+        """
+        if not ips:
+            raise TelloException("No ips provided")
+
+        tellos = []
+        for ip in ips:
+            tellos.append(Tello(ip.strip(), swarm = True))
+
+        for i in range(len(tellos)):
+            tellos[i]._setSwarmPos(i)
+
+        
+
+        return TelloSwarm(tellos)
+
+    def __init__(self, tellos: List[Tello]):
+        """Initialize a TelloSwarm instance
+
+        Arguments:
+            tellos: list of [Tello][tello] instances
+        """
+        self.tellos = tellos
+        self.barrier = Barrier(len(tellos))
+        self.funcBarrier = Barrier(len(tellos) + 1)
+        self.funcQueues = [Queue() for tello in tellos]
+        self.simulation = SIMULATION
+
+        def worker(i):
+            queue = self.funcQueues[i]
+            tello = self.tellos[i]
+
+            while True:
+                func = queue.get()
+                self.funcBarrier.wait()
+                func(i, tello)
+                self.funcBarrier.wait()
+
+        self.threads = []
+        for i, _ in enumerate(tellos):
+            thread = Thread(target=worker, daemon=True, args=(i,))
+            thread.start()
+            self.threads.append(thread)
+
+        self.simulation.event_loop()
+
+    def sequential(self, func: Callable[[int, Tello], None]):
+        """Call `func` for each tello sequentially. The function retrieves
+        two arguments: The index `i` of the current drone and `tello` the
+        current [Tello][tello] instance.
+
+        ```python
+        swarm.parallel(lambda i, tello: tello.land())
+        ```
+        """
+
+        for i, tello in enumerate(self.tellos):
+            func(i, tello)
+
+    def parallel(self, func: Callable[[int, Tello], None]):
+        """Call `func` for each tello in parallel. The function retrieves
+        two arguments: The index `i` of the current drone and `tello` the
+        current [Tello][tello] instance.
+
+        You can use `swarm.sync()` for syncing between threads.
+
+        ```python
+        swarm.parallel(lambda i, tello: tello.move_up(50 + i * 10))
+        ```
+        """
+
+        for queue in self.funcQueues:
+            queue.put(func)
+
+        self.funcBarrier.wait()
+        self.funcBarrier.wait()
+
+    def sync(self, timeout: float = None):
+        """Sync parallel tello threads. The code continues when all threads
+        have called `swarm.sync`.
+
+        ```python
+        def doStuff(i, tello):
+            tello.move_up(50 + i * 10)
+            swarm.sync()
+
+            if i == 2:
+                tello.flip_back()
+            # make all other drones wait for one to complete its flip
+            swarm.sync()
+
+        swarm.parallel(doStuff)
+        ```
+        """
+        return self.barrier.wait(timeout)
+
+    def land(self):
+        for t in self.tellos:
+            t.land()
+        self.simulation.quit()
+
+    def __getattr__(self, attr):
+        """Call a standard tello function in parallel on all tellos.
+
+        ```python
+        swarm.command()
+        swarm.takeoff()
+        swarm.move_up(50)
+        ```
+        """
+        def callAll(*args, **kwargs):
+            self.parallel(lambda i, tello: getattr(tello, attr)(*args, **kwargs))
+
+        return callAll
+
+    def __iter__(self):
+        """Iterate over all drones in the swarm.
+
+        ```python
+        for tello in swarm:
+            print(tello.get_battery())
+        ```
+        """
+        return iter(self.tellos)
+
+    def __len__(self):
+        """Return the amount of tellos in the swarm
+
+        ```python
+        print("Tello count: {}".format(len(swarm)))
+        ```
+        """
+        return len(self.tellos)
