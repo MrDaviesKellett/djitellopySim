@@ -34,3 +34,9 @@ If you encounter any issues with the simulator, please check the GitHub issue tr
 ## Contributing
 
 We welcome contributions from the community! Please see the contributing guidelines for more information on how to contribute.
+
+## To Do:
+- [x] add support for flips
+- [x] add support for EXT module LED
+- [x] add swarm support
+- [ ] add support for EXT module mLED (screen)
