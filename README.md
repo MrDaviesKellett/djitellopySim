@@ -17,7 +17,6 @@ This is a Python-based simulator for the DJI Tello drone. The simulator allows y
 ## Installation
 
 To install the DJI Tello Simulator, simply clone this repository and run the following command:
-basic
 
 ``` pip install -r requirements.txt ```
 
