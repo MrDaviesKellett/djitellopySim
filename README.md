@@ -13,6 +13,8 @@ Pygame 3D scene instead of sending UDP commands to physical hardware.
 - Simulated state packets, query commands, RC control, video frame reads, mission
   pad toggles, video settings, and Tello Talent extension commands.
 - PyPI-ready packaging with automatic dependency installation.
+- Uses `pygame-ce` for modern prebuilt wheels, including macOS universal2
+  wheels, while still importing the runtime module as `pygame`.
 
 ## Installation
 
@@ -65,7 +67,7 @@ python -m build
 ```
 
 This repository includes `.github/workflows/publish.yml`, which publishes to
-PyPI automatically when a GitHub Release is published.
+PyPI automatically when a `v*` tag is pushed or a GitHub Release is published.
 
 ### PyPI Trusted Publishing Setup
 
