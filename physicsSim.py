@@ -86,11 +86,9 @@ class sim:
     def _project_drone_points(self, tello):
         pos = tello.drone["pos"]
         yaw = math.radians(tello.drone["rot"])
-        pitch = math.radians(tello.drone.get("pitch", 0))
-        roll = math.radians(tello.drone.get("roll", 0))
 
         def point(local):
-            rx, ry, rz = self._rotate_point(*local, yaw, pitch, roll)
+            rx, ry, rz = self._rotate_point(local[0], local[1], 0, yaw, 0, 0)
             return self._world_to_screen(pos[0] + rx, pos[1] + ry, pos[2] + rz)
 
         return point
@@ -115,12 +113,7 @@ class sim:
         )
 
         point = self._project_drone_points(tello)
-        body_front = point((0, 28, 0))
-        body_back = point((0, -30, 0))
-        body_left = point((-34, 0, 0))
-        body_right = point((34, 0, 0))
-        body_top = point((0, 0, 15))
-        body_bottom = point((0, 0, -8))
+        body_center = point((0, 0, 0))
 
         rotors = [
             point((-72, 54, 0)),
@@ -129,15 +122,14 @@ class sim:
             point((72, -54, 0)),
         ]
 
-        for rotor in rotors:
-            pygame.draw.line(self.screen, (112, 126, 140), body_top, rotor, 6)
-            pygame.draw.line(self.screen, (27, 36, 43), body_bottom, rotor, 3)
+        arm_color = (118, 132, 143)
+        pygame.draw.line(self.screen, arm_color, rotors[0], rotors[3], 7)
+        pygame.draw.line(self.screen, arm_color, rotors[1], rotors[2], 7)
 
-        body_poly = [body_front, body_right, body_back, body_left]
-        pygame.draw.polygon(self.screen, (52, 69, 80), body_poly)
-        pygame.draw.polygon(self.screen, (157, 168, 176), [body_top, body_right, body_front])
-        pygame.draw.polygon(self.screen, (92, 107, 118), [body_top, body_left, body_back, body_right])
-        pygame.draw.polygon(self.screen, (221, 226, 230), body_poly, 2)
+        body_rect = pygame.Rect(0, 0, 58, 38)
+        body_rect.center = (int(body_center[0]), int(body_center[1]))
+        pygame.draw.ellipse(self.screen, (53, 67, 77), body_rect)
+        pygame.draw.ellipse(self.screen, (211, 218, 224), body_rect, 2)
 
         flip_phase = tello.drone.get("flip", 0)
         rotor_radius = 17 if flip_phase == 0 else max(6, int(17 * abs(flip_phase - 12) / 12))
@@ -146,11 +138,11 @@ class sim:
 
         top = self._world_to_screen(pos[0], pos[1], pos[2])
         ground = self._world_to_screen(pos[0], pos[1], 0)
-        pygame.draw.line(self.screen, ALTITUDE_COLOR, top, ground, 2)
+        pygame.draw.line(self.screen, ALTITUDE_COLOR, (top[0] - 40, top[1]), (ground[0] - 40, ground[1]), 2)
         height_cm = int(max(0, (pos[2] - 1.0) * 100))
         font = pygame.font.Font(None, 22)
         label = font.render(f"{height_cm} cm", True, ALTITUDE_COLOR)
-        self.screen.blit(label, (top[0] + 12, top[1] - 10))
+        self.screen.blit(label, (top[0] - 30, top[1] - 24))
 
     def render_frame(self, windAmt=0.3, apply_wind=True):
         if not self._can_use_pygame():
