@@ -20,13 +20,19 @@ class sim:
         self.height = height
         self.running = True
         self.tellos = []
+        self._main_thread_id = threading.get_ident()
         self._lock = threading.RLock()
+        self._noise_x = 0
+        self._noise_y = 0
+        self._noise_z = 0
+        self._noise_t = 0
         self.screen = pygame.display.set_mode((self.width, self.height))
         pygame.display.set_caption("Tello Simulation - 3D")
-        self.update_thread = threading.Thread(target=self.update_visual, daemon=True)
-        self.update_thread.start()
+        self.render_frame(apply_wind=False)
 
     def event_loop(self):
+        if not self._can_use_pygame():
+            return
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 self.quit()
@@ -43,7 +49,11 @@ class sim:
 
     def quit(self):
         self.running = False
-        pygame.quit()
+        if self._can_use_pygame():
+            pygame.quit()
+
+    def _can_use_pygame(self):
+        return self.running and threading.get_ident() == self._main_thread_id
 
     def _world_to_screen(self, x, y, z):
         sx = self.width / 2 + (x - self.width / 2) * 0.72 - (y - self.height / 2) * 0.28
@@ -142,40 +152,51 @@ class sim:
         label = font.render(f"{height_cm} cm", True, ALTITUDE_COLOR)
         self.screen.blit(label, (top[0] + 12, top[1] - 10))
 
+    def render_frame(self, windAmt=0.3, apply_wind=True):
+        if not self._can_use_pygame():
+            return
+
+        self.event_loop()
+        if not self.running:
+            return
+
+        if apply_wind:
+            self._noise_x = uniform(-windAmt, windAmt) + self._noise_x / 2
+            self._noise_y = uniform(-windAmt, windAmt) + self._noise_y / 2
+            self._noise_z = uniform(-windAmt, windAmt) + self._noise_z / 2
+            self._noise_t = uniform(-windAmt, windAmt) + self._noise_t / 2
+        else:
+            self._noise_x = self._noise_y = self._noise_z = self._noise_t = 0
+
+        self.screen.fill(BACKGROUND)
+        self._draw_grid()
+
+        with self._lock:
+            tellos = list(self.tellos)
+
+        for tello in tellos:
+            if apply_wind and tello.is_flying and tello.is_windy:
+                tello.drone["pos"][0] += self._noise_x
+                tello.drone["pos"][1] += self._noise_y
+                tello.drone["pos"][2] = max(1.0, tello.drone["pos"][2] + self._noise_z * 0.01)
+                tello.drone["rot"] += self._noise_t * 0.03
+
+            tello.flightPathTaken.append(tuple(tello.drone["pos"]))
+            if len(tello.flightPathTaken) > 2000:
+                tello.flightPathTaken = tello.flightPathTaken[-1000:]
+
+            if SHOW_TRAILS:
+                for path in tello.flightPathTaken:
+                    pygame.draw.circle(self.screen, (130, 140, 148), self._world_to_screen(path[0], path[1], 0), 2)
+
+            if tello.drone.get("flip", 0) > 0:
+                tello.drone["flip"] -= 1
+
+            self._draw_drone_3d(tello)
+
+        pygame.display.flip()
+
     def update_visual(self, windAmt=0.3):
-        noise_x = noise_y = noise_z = noise_t = 0
         while self.running:
-            self.event_loop()
-            noise_x = uniform(-windAmt, windAmt) + noise_x / 2
-            noise_y = uniform(-windAmt, windAmt) + noise_y / 2
-            noise_z = uniform(-windAmt, windAmt) + noise_z / 2
-            noise_t = uniform(-windAmt, windAmt) + noise_t / 2
-
-            self.screen.fill(BACKGROUND)
-            self._draw_grid()
-
-            with self._lock:
-                tellos = list(self.tellos)
-
-            for tello in tellos:
-                if tello.is_flying and tello.is_windy:
-                    tello.drone["pos"][0] += noise_x
-                    tello.drone["pos"][1] += noise_y
-                    tello.drone["pos"][2] = max(1.0, tello.drone["pos"][2] + noise_z * 0.01)
-                    tello.drone["rot"] += noise_t * 0.03
-
-                tello.flightPathTaken.append(tuple(tello.drone["pos"]))
-                if len(tello.flightPathTaken) > 2000:
-                    tello.flightPathTaken = tello.flightPathTaken[-1000:]
-
-                if SHOW_TRAILS:
-                    for path in tello.flightPathTaken:
-                        pygame.draw.circle(self.screen, (130, 140, 148), self._world_to_screen(path[0], path[1], 0), 2)
-
-                if tello.drone.get("flip", 0) > 0:
-                    tello.drone["flip"] -= 1
-
-                self._draw_drone_3d(tello)
-
-            pygame.display.flip()
+            self.render_frame(windAmt=windAmt)
             time.sleep(1 / 60)

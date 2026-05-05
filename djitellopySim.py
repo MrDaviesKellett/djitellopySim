@@ -171,7 +171,7 @@ class Tello:
         Tello.LOGGER.info("Tello instance was initialized. Host: '%s'. Port: '%s'.", host, Tello.CONTROL_UDP_PORT)
         if self.simulation is not None:
             self.simulation.register(self)
-            self.simulation.event_loop()
+            self._render_frame(apply_wind=False)
 
     def _setSwarmPos(self, i):
         self.drone["pos"][0] += -260 + 130 * (i % 4)
@@ -181,10 +181,20 @@ class Tello:
 
     def _simulate_latency(self, min_delay=0.1, max_delay=0.5):
         if self.is_latency:
-            time.sleep(uniform(min_delay, max_delay))
+            self._sleep_with_visual(uniform(min_delay, max_delay))
 
     def simLat(self, min=0.1, max=0.5):
         self._simulate_latency(min, max)
+
+    def _render_frame(self, apply_wind=True):
+        if self.simulation is not None:
+            self.simulation.render_frame(apply_wind=apply_wind)
+
+    def _sleep_with_visual(self, seconds):
+        end = time.time() + seconds
+        while time.time() < end:
+            self._render_frame()
+            time.sleep(min(1 / 60, max(end - time.time(), 0)))
 
     def _flight_time(self):
         if self._start_time is None:
@@ -470,9 +480,11 @@ class Tello:
                 self.drone["rot"] += yaw_delta
             self.drone["pitch"] = max(-18, min(18, -diff[1] / max_diff * 12))
             self.drone["roll"] = max(-18, min(18, diff[0] / max_diff * 12))
+            self._render_frame()
             time.sleep(0.01)
         self.drone["pitch"] = 0
         self.drone["roll"] = 0
+        self._render_frame(apply_wind=False)
         self._update_state()
 
     def move(self, direction: str, x: int):
@@ -510,6 +522,7 @@ class Tello:
         steps = int(max(abs(delta / max(self.drone["speed"], 1) * 60), 1))
         for _ in range(steps):
             self.drone["rot"] += delta / steps
+            self._render_frame()
             time.sleep(0.01)
         self._update_state()
 
@@ -519,6 +532,9 @@ class Tello:
             raise TelloException(f"Unknown flip direction: {direction}")
         self.LOGGER.info("sending flip command to drone in direction %s", direction)
         self.drone["flip"] = 24
+        for _ in range(24):
+            self._render_frame(apply_wind=False)
+            time.sleep(1 / 60)
 
     def move_up(self, x: int):
         self.move("up", x)
@@ -627,6 +643,7 @@ class Tello:
         self.drone["rot"] -= yaw_velocity * dt
         self.drone["pitch"] = -forward_backward_velocity / 8
         self.drone["roll"] = left_right_velocity / 8
+        self._render_frame()
         self._update_state()
 
     def set_wifi_credentials(self, ssid: str, password: str):
@@ -831,7 +848,7 @@ class TelloSwarm:
             self.threads.append(thread)
 
         if self.simulation is not None:
-            self.simulation.event_loop()
+            self.simulation.render_frame(apply_wind=False)
 
     def sequential(self, func: Callable[[int, Tello], None]):
         for i, tello in enumerate(self.tellos):
