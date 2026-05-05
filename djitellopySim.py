@@ -150,6 +150,7 @@ class Tello:
             "roll": 0.0,
             "speed": 100,
             "flip": 0,
+            "flip_direction": "b",
             "led": (0, 0, 0),
             "mled": "",
             "battery": 100,
@@ -404,7 +405,8 @@ class Tello:
         if parts[0].lower() == "led" and len(parts) >= 4:
             self.drone["led"] = tuple(max(0, min(255, int(v))) for v in parts[1:4])
         elif parts[0].lower() == "mled":
-            self.drone["mled"] = " ".join(parts[1:])
+            pattern = "".join(parts[2:]) if len(parts) >= 3 and len("".join(parts[2:])) >= 64 else "".join(parts[1:])
+            self.drone["mled"] = pattern[:64].ljust(64, "0")
 
     def connect(self, wait_for_state=True):
         self._connected = True
@@ -532,6 +534,7 @@ class Tello:
             raise TelloException(f"Unknown flip direction: {direction}")
         self.LOGGER.info("sending flip command to drone in direction %s", direction)
         self.drone["flip"] = 24
+        self.drone["flip_direction"] = direction
         for _ in range(24):
             self._render_frame(apply_wind=False)
             time.sleep(1 / 60)
