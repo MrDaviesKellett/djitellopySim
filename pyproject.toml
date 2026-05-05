@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "djitellopy-sim"
+version = "0.2.0"
+description = "A local DJI Tello simulator with a djitellopy-compatible Python API and 3D Pygame renderer."
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+authors = [
+  { name = "djitellopySim contributors" }
+]
+keywords = ["dji", "tello", "drone", "simulator", "pygame", "djitellopy"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Developers",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Software Development :: Testing",
+  "Topic :: Scientific/Engineering :: Visualization"
+]
+dependencies = [
+  "pygame>=2.5,<3",
+  "numpy>=1.24"
+]
+
+[tool.setuptools]
+py-modules = ["djitellopySim", "physicsSim"]
