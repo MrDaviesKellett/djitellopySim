@@ -53,7 +53,7 @@ normally communicate over UDP.
 - Wi-Fi, port, reboot, SDK, serial number, and active status commands are
   simulated metadata only.
 - The extension board LED command changes the rendered top LED. Matrix LED
-  commands are stored on the drone state but are not rendered yet.
+  commands are rendered above the drone as an 8 by 8 red/blue grid.
 
 ## Remaining Gaps For 1:1 Behavioral Parity
 
@@ -63,4 +63,3 @@ normally communicate over UDP.
   command argument.
 - Accurate mission pad coordinate transforms and dual-pad `jump` behavior.
 - Physics-grade curve paths, acceleration, yaw/pitch/roll, and wind modeling.
-- Rendering of Tello Talent matrix LED patterns.

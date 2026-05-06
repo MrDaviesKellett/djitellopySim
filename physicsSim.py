@@ -274,6 +274,30 @@ class sim:
             self.screen.blit(item, (panel.x + 9, y))
             y += 20
 
+    def _draw_race_timer(self, tello):
+        gates = tello.drone.get("race_gates", [])
+        if not gates and tello.drone.get("race_timer_start") is None and tello.drone.get("race_final_time_seconds") is None:
+            return
+        timer = tello.get_race_time()
+        font = pygame.font.Font(None, 21)
+        status = "running" if timer["running"] else "finished" if tello.drone.get("race_final_time_seconds") is not None else "ready"
+        lines = [
+            f"Race {status}",
+            f"time {timer['elapsed_seconds']:.1f}s  penalty +{timer['penalty_seconds']:.1f}s",
+            f"final {timer['final_time_seconds']:.1f}s",
+            f"missed {timer['missed_gates']}  wrong order {timer['wrong_order_gates']}",
+        ]
+        rendered = [font.render(line, True, (220, 228, 236)) for line in lines]
+        width = max(item.get_width() for item in rendered) + 18
+        height = len(rendered) * 21 + 12
+        panel = pygame.Rect(14, self.height - height - 14, width, height)
+        pygame.draw.rect(self.screen, (8, 12, 16), panel, border_radius=4)
+        pygame.draw.rect(self.screen, (70, 82, 96), panel, 1, border_radius=4)
+        y = panel.y + 7
+        for item in rendered:
+            self.screen.blit(item, (panel.x + 9, y))
+            y += 21
+
     def _project_drone_points(self, tello):
         pos = tello.drone["pos"]
         yaw = math.radians(tello.drone["rot"])
@@ -283,13 +307,14 @@ class sim:
 
         def point(local):
             x, y = local[0], local[1]
-            z = 0
+            z = local[2] if len(local) > 2 else 0
             if flip_frames > 0:
-                direction = -1 if flip_direction in {"b", "r"} else 1
                 if flip_direction in {"f", "b"}:
-                    y, z = y * math.cos(flip_angle), direction * y * math.sin(flip_angle)
+                    angle = flip_angle if flip_direction == "f" else -flip_angle
+                    y, z = y * math.cos(angle) - z * math.sin(angle), y * math.sin(angle) + z * math.cos(angle)
                 else:
-                    x, z = x * math.cos(flip_angle), direction * x * math.sin(flip_angle)
+                    angle = flip_angle if flip_direction == "l" else -flip_angle
+                    x, z = x * math.cos(angle) + z * math.sin(angle), -x * math.sin(angle) + z * math.cos(angle)
             rx, ry, rz = self._rotate_point(x, y, z / 100, yaw, 0, 0)
             return self._world_to_screen(pos[0] + rx, pos[1] + ry, pos[2] + rz)
 
@@ -313,33 +338,39 @@ class sim:
 
     def _draw_expansion_kit(self, tello, body_center, body_width, body_height):
         led = tello.drone.get("led", (0, 0, 0))
-        led_center = (int(body_center[0]), int(body_center[1] - body_height / 2 - 7))
-        pygame.draw.circle(self.screen, (12, 14, 16), led_center, 7)
-        if any(led):
-            pygame.draw.circle(self.screen, led, led_center, 5)
-        else:
-            pygame.draw.circle(self.screen, (46, 52, 58), led_center, 5, 1)
-
         pattern = tello.drone.get("mled", "")
-        if not pattern:
-            return
-
         cell = 4
         gap = 1
         panel_size = 8 * cell + 7 * gap
         panel = pygame.Rect(0, 0, panel_size + 6, panel_size + 6)
-        panel.center = (int(body_center[0]), int(body_center[1] + body_height / 2 + panel.height / 2 + 4))
-        pygame.draw.rect(self.screen, (8, 10, 12), panel, border_radius=2)
-        pygame.draw.rect(self.screen, (81, 92, 102), panel, 1, border_radius=2)
+        panel.center = (int(body_center[0]), int(body_center[1] - body_height / 2 - panel.height / 2 - 10))
 
-        start_x = panel.x + 3
-        start_y = panel.y + 3
-        for row in range(8):
-            for col in range(8):
-                index = row * 8 + col
-                color = self._mled_color(pattern[index] if index < len(pattern) else "0")
-                rect = pygame.Rect(start_x + col * (cell + gap), start_y + row * (cell + gap), cell, cell)
-                pygame.draw.rect(self.screen, color, rect)
+        led_center = (int(body_center[0]), int(panel.y - 12 if pattern else body_center[1] - body_height / 2 - 14))
+        if any(led):
+            glow = pygame.Surface((54, 54), pygame.SRCALPHA)
+            for radius, alpha in ((25, 28), (18, 42), (12, 70)):
+                pygame.draw.circle(glow, (*led, alpha), (27, 27), radius)
+            self.screen.blit(glow, (led_center[0] - 27, led_center[1] - 27))
+
+        pygame.draw.circle(self.screen, (12, 14, 16), led_center, 12)
+        if any(led):
+            pygame.draw.circle(self.screen, led, led_center, 8)
+            pygame.draw.circle(self.screen, (245, 250, 255), (led_center[0] - 3, led_center[1] - 3), 2)
+        else:
+            pygame.draw.circle(self.screen, (46, 52, 58), led_center, 8, 1)
+
+        if pattern:
+            pygame.draw.rect(self.screen, (8, 10, 12), panel, border_radius=2)
+            pygame.draw.rect(self.screen, (81, 92, 102), panel, 1, border_radius=2)
+
+            start_x = panel.x + 3
+            start_y = panel.y + 3
+            for row in range(8):
+                for col in range(8):
+                    index = row * 8 + col
+                    color = self._mled_color(pattern[index] if index < len(pattern) else "0")
+                    rect = pygame.Rect(start_x + col * (cell + gap), start_y + row * (cell + gap), cell, cell)
+                    pygame.draw.rect(self.screen, color, rect)
 
     def _draw_drone_3d(self, tello):
         pos = tello.drone["pos"]
@@ -363,8 +394,8 @@ class sim:
         ]
 
         arm_color = (118, 132, 143)
-        pygame.draw.line(self.screen, arm_color, rotors[0], rotors[3], 7)
-        pygame.draw.line(self.screen, arm_color, rotors[1], rotors[2], 7)
+        for rotor in rotors:
+            pygame.draw.line(self.screen, arm_color, body_center, rotor, 6)
 
         flip_phase = tello.drone.get("flip", 0)
         flip_direction = tello.drone.get("flip_direction", "b")
@@ -376,10 +407,22 @@ class sim:
         elif flip_phase > 0:
             body_height = max(8, int(body_height * abs(math.cos(flip_angle))))
 
-        body_rect = pygame.Rect(0, 0, body_width, body_height)
-        body_rect.center = (int(body_center[0]), int(body_center[1]))
-        pygame.draw.ellipse(self.screen, (53, 67, 77), body_rect)
-        pygame.draw.ellipse(self.screen, (211, 218, 224), body_rect, 2)
+        if flip_phase > 0:
+            body = [
+                point((-32, -22, 0)),
+                point((32, -22, 0)),
+                point((32, 22, 0)),
+                point((-32, 22, 0)),
+            ]
+            pygame.draw.polygon(self.screen, (53, 67, 77), body)
+            pygame.draw.lines(self.screen, (211, 218, 224), True, body, 2)
+        else:
+            body_rect = pygame.Rect(0, 0, body_width, body_height)
+            body_rect.center = (int(body_center[0]), int(body_center[1]))
+            pygame.draw.ellipse(self.screen, (53, 67, 77), body_rect)
+            pygame.draw.ellipse(self.screen, (211, 218, 224), body_rect, 2)
+        nose = point((0, 34, 0))
+        pygame.draw.circle(self.screen, (240, 246, 252), (int(nose[0]), int(nose[1])), 3)
         self._draw_expansion_kit(tello, body_center, body_width, body_height)
 
         for rotor in rotors:
@@ -437,6 +480,7 @@ class sim:
                     pygame.draw.circle(self.screen, (130, 140, 148), self._world_to_screen(path[0], path[1], 0), 2)
 
             self._draw_drone_3d(tello)
+            self._draw_race_timer(tello)
 
             if tello.drone.get("flip", 0) > 0:
                 tello.drone["flip"] -= 1

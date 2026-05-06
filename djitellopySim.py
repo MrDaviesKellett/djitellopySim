@@ -173,6 +173,12 @@ class Tello:
             "race_completed": False,
             "race_last_pos": [500.0, 400.0, 1.0],
             "race_hints": {"distance": True, "height": False, "relative": False},
+            "race_timer_start": None,
+            "race_elapsed_seconds": 0.0,
+            "race_penalty_seconds": 0.0,
+            "race_missed_gates": 0,
+            "race_wrong_order_gates": 0,
+            "race_final_time_seconds": None,
         }
         self._state = {}
         self._update_state()
@@ -225,6 +231,7 @@ class Tello:
         self.drone["race_next_gate"] = 0
         self.drone["race_completed"] = False
         self.drone["race_last_pos"] = list(self.drone["pos"])
+        self._reset_race_timer()
         self._render_frame(apply_wind=False)
         return gates
 
@@ -271,6 +278,7 @@ class Tello:
                 "type": gate_type,
                 "radius": RACE_HOOP_RADIUS_CM if gate_type == "hoop" else RACE_ARCH_RADIUS_CM,
                 "passed": False,
+                "wrong_order": False,
             })
             previous = [x, y]
         return gates
@@ -337,9 +345,11 @@ class Tello:
 
     def clear_race_gates(self):
         self.drone["race_gates"] = []
+        self.drone["race_curve"] = []
         self.drone["race_next_gate"] = 0
         self.drone["race_completed"] = False
         self.drone["race_last_pos"] = list(self.drone["pos"])
+        self._reset_race_timer()
         self._render_frame(apply_wind=False)
 
     def get_race_gates(self):
@@ -388,25 +398,80 @@ class Tello:
             self.drone["race_last_pos"] = list(self.drone["pos"])
             return
 
-        gate = gates[next_index]
         previous = self.drone.get("race_last_pos", self.drone["pos"])
         current = self.drone["pos"]
-        prev_measure = self._race_gate_measurement(gate, previous)
-        current_measure = self._race_gate_measurement(gate, current)
-        crossed_plane = prev_measure["ahead_cm"] < 0 <= current_measure["ahead_cm"]
-        radius = gate.get("radius", RACE_HOOP_RADIUS_CM)
-        if gate.get("type") == "arch":
-            inside_opening = current_measure["vertical_cm"] >= 0 and math.hypot(current_measure["side_cm"], current_measure["vertical_cm"]) <= radius
-        else:
-            inside_opening = math.hypot(current_measure["side_cm"], current_measure["vertical_cm"]) <= radius
 
-        if crossed_plane and inside_opening:
-            gate["passed"] = True
-            next_index += 1
-            self.drone["race_next_gate"] = next_index
-            self.drone["race_completed"] = next_index >= len(gates)
+        for index, gate in enumerate(gates):
+            if gate.get("passed"):
+                continue
+            if not self._crossed_gate_opening(gate, previous, current):
+                continue
+            if index == next_index:
+                gate["passed"] = True
+                next_index += 1
+                self.drone["race_next_gate"] = next_index
+                self.drone["race_completed"] = next_index >= len(gates)
+            elif index > next_index and not gate.get("wrong_order"):
+                gate["wrong_order"] = True
+                self.drone["race_wrong_order_gates"] += 1
+                self.drone["race_penalty_seconds"] += 5
 
         self.drone["race_last_pos"] = list(current)
+
+    def _crossed_gate_opening(self, gate, previous, current):
+        prev_measure = self._race_gate_measurement(gate, previous)
+        current_measure = self._race_gate_measurement(gate, current)
+        if not (prev_measure["ahead_cm"] < 0 <= current_measure["ahead_cm"]):
+            return False
+        radius = gate.get("radius", RACE_HOOP_RADIUS_CM)
+        if gate.get("type") == "arch":
+            return current_measure["vertical_cm"] >= 0 and math.hypot(current_measure["side_cm"], current_measure["vertical_cm"]) <= radius
+        return math.hypot(current_measure["side_cm"], current_measure["vertical_cm"]) <= radius
+
+    def _reset_race_timer(self):
+        self.drone["race_timer_start"] = None
+        self.drone["race_elapsed_seconds"] = 0.0
+        self.drone["race_penalty_seconds"] = 0.0
+        self.drone["race_missed_gates"] = 0
+        self.drone["race_wrong_order_gates"] = 0
+        self.drone["race_final_time_seconds"] = None
+        for gate in self.drone.get("race_gates", []):
+            gate["passed"] = False
+            gate["wrong_order"] = False
+
+    def _start_race_timer(self):
+        self._reset_race_timer()
+        self.drone["race_next_gate"] = 0
+        self.drone["race_completed"] = False
+        self.drone["race_last_pos"] = list(self.drone["pos"])
+        self.drone["race_timer_start"] = time.time()
+
+    def _finish_race_timer(self):
+        start = self.drone.get("race_timer_start")
+        if start is None:
+            return
+        elapsed = time.time() - start
+        missed = sum(1 for gate in self.drone.get("race_gates", []) if not gate.get("passed"))
+        penalty = self.drone.get("race_penalty_seconds", 0.0) + missed * 10
+        self.drone["race_elapsed_seconds"] = elapsed
+        self.drone["race_missed_gates"] = missed
+        self.drone["race_penalty_seconds"] = penalty
+        self.drone["race_final_time_seconds"] = elapsed + penalty
+        self.drone["race_timer_start"] = None
+
+    def get_race_time(self):
+        start = self.drone.get("race_timer_start")
+        elapsed = (time.time() - start) if start is not None else self.drone.get("race_elapsed_seconds", 0.0)
+        penalty = self.drone.get("race_penalty_seconds", 0.0)
+        final_time = self.drone.get("race_final_time_seconds")
+        return {
+            "running": start is not None,
+            "elapsed_seconds": elapsed,
+            "penalty_seconds": penalty,
+            "missed_gates": self.drone.get("race_missed_gates", 0),
+            "wrong_order_gates": self.drone.get("race_wrong_order_gates", 0),
+            "final_time_seconds": elapsed + penalty if final_time is None else final_time,
+        }
 
     def _sleep_with_visual(self, seconds):
         end = time.time() + seconds
@@ -690,11 +755,13 @@ class Tello:
         self.is_flying = True
         self._motors_on = True
         self._start_time = self._start_time or time.time()
+        self._start_race_timer()
 
     def land(self, close_window=True):
         self.LOGGER.info("sending land command to drone")
         self._simulate_latency()
         self._animate_to(z=1.0, speed=max(self.drone["speed"], 100))
+        self._finish_race_timer()
         self.is_flying = False
         self._motors_on = False
         if close_window and not self.swarm and self.simulation is not None:
