@@ -8,6 +8,8 @@ Pygame 3D scene instead of sending UDP commands to physical hardware.
 
 - 3D projected drone renderer with altitude, yaw, tilt, rotors, shadows, trails,
   and extension LED color.
+- Random flyable race-gate courses with ordered pass-through tracking and a
+  visual measurement HUD for the next gate.
 - Single-drone and swarm simulation.
 - Broad compatibility with `djitellopy` 2.5.0 method names.
 - Simulated state packets, query commands, RC control, video frame reads, mission
@@ -44,6 +46,37 @@ tello.send_expansion_command("led 0 255 255")
 tello.flip_back()
 tello.land()
 ```
+
+Race gates can be generated with one simulator command. Courses can use
+`line`, `slalom`, `loop`, `climb`, `arches`, `mixed`, or `random` layouts.
+The 3D view shows ordered gates with the active gate highlighted. Hints are
+drawn next to the active gate and can be toggled individually:
+
+```python
+from djitellopySim import Tello
+
+tello = Tello()
+tello.connect()
+tello.send_control_command("racegates 5 slalom")
+tello.send_control_command("camerafollow on")
+tello.send_control_command("racehints distance on")
+tello.send_control_command("racehints height on")
+tello.takeoff()
+
+print(tello.get_race_gate_measurements())
+```
+
+Camera and hint controls are available from code or from the simulator window:
+
+```python
+tello.send_control_command("cameraoverview")
+tello.send_control_command("camerafollow on")
+tello.send_control_command("racehints relative on")
+```
+
+Keyboard shortcuts are shown in the top-right of the simulator. `F` follows the
+drone, `O` shows the whole course, `+`/`-` zoom, and `D`, `H`, `R` toggle
+distance, height, and relative-position hints.
 
 Swarm code follows the same shape as `djitellopy`:
 

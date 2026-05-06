@@ -3,7 +3,7 @@ import math
 import time
 from collections import deque
 from queue import Queue
-from random import randint, uniform
+from random import Random, randint, uniform
 from threading import Barrier, Lock, Thread
 from typing import Callable, Dict, List, Optional, Union
 
@@ -13,6 +13,9 @@ from physicsSim import sim
 
 PI = math.pi
 SIMULATION = None
+RACE_HOOP_RADIUS_CM = 145
+RACE_ARCH_RADIUS_CM = 380
+RACE_MAX_TURN_DEGREES = 110
 
 
 class TelloException(Exception):
@@ -165,6 +168,11 @@ class Tello:
             "wifi_snr": "90",
             "serial_number": "SIM000000000",
             "sdk_version": "3.0",
+            "race_gates": [],
+            "race_next_gate": 0,
+            "race_completed": False,
+            "race_last_pos": [500.0, 400.0, 1.0],
+            "race_hints": {"distance": True, "height": False, "relative": False},
         }
         self._state = {}
         self._update_state()
@@ -189,7 +197,216 @@ class Tello:
 
     def _render_frame(self, apply_wind=True):
         if self.simulation is not None:
+            self._update_race_gate_progress()
             self.simulation.render_frame(apply_wind=apply_wind)
+
+    def setup_race_gates(self, count: int = 5, course: str = "line", seed: Optional[int] = None):
+        if isinstance(course, int) and seed is None:
+            seed = course
+            course = "line"
+        rng = Random(seed)
+        count = max(1, min(12, int(count)))
+        start = self.drone["pos"]
+        course = str(course).lower()
+        if course == "random":
+            course = rng.choice(["line", "slalom", "loop", "climb", "arches", "mixed"])
+        if course not in {"line", "slalom", "loop", "climb", "arches", "mixed"}:
+            course = "line"
+
+        gates = []
+        for _ in range(30):
+            gates = self._generate_race_course(count, course, rng, start)
+            if self._race_course_max_turn_degrees(gates) <= RACE_MAX_TURN_DEGREES:
+                break
+
+        self.drone["race_gates"] = gates
+        self.drone["race_curve"] = self._race_course_curve(gates)
+        self.drone["race_max_turn_degrees"] = self._race_course_max_turn_degrees(gates)
+        self.drone["race_next_gate"] = 0
+        self.drone["race_completed"] = False
+        self.drone["race_last_pos"] = list(self.drone["pos"])
+        self._render_frame(apply_wind=False)
+        return gates
+
+    def _generate_race_course(self, count, course, rng, start):
+        templates = {
+            "line": [(650, 0), (1300, 0), (1950, 0), (2600, 0), (3250, 0), (3900, 0), (4550, 0), (5200, 0)],
+            "slalom": [(620, -280), (1240, 280), (1860, -280), (2480, 280), (3100, -280), (3720, 280), (4340, -180), (4960, 0)],
+            "loop": [(760, 0), (1120, 620), (780, 1240), (80, 1500), (-640, 1180), (-980, 480), (-720, -260), (20, -620), (760, -320), (1080, 360)],
+            "climb": [(620, -150), (1240, 120), (1860, -120), (2480, 160), (3100, -80), (3720, 180), (4340, 0), (4960, 120)],
+            "arches": [(1050, 0), (2100, 0), (3150, 0), (4200, 0), (5250, 320), (6300, 320), (7350, 40), (8400, -260)],
+            "mixed": [(760, -260), (1520, 240), (2480, -220), (3360, 260), (4320, -120), (5200, 320), (6160, 0), (7040, -260)],
+        }
+        offsets = templates[course]
+        course_yaw = math.radians(self.drone["rot"])
+        forward_x, forward_y = math.sin(course_yaw), math.cos(course_yaw)
+        right_x, right_y = math.sin(course_yaw + math.pi / 2), math.cos(course_yaw + math.pi / 2)
+        base_z = max(2.7, min(3.3, start[2] + 1.0 if start[2] > 1.2 else 2.9))
+        previous = [start[0], start[1]]
+        gates = []
+
+        for index in range(count):
+            forward, right = offsets[index % len(offsets)]
+            gate_type = "hoop"
+            if course == "arches":
+                gate_type = "arch"
+            elif course == "mixed":
+                gate_type = "arch" if index % 3 == 2 else "hoop"
+
+            x = start[0] + forward * forward_x + right * right_x + rng.uniform(-35, 35)
+            y = start[1] + forward * forward_y + right * right_y + rng.uniform(-35, 35)
+            heading = math.atan2(x - previous[0], y - previous[1])
+
+            if gate_type == "arch":
+                z = 1.0
+            elif course == "climb":
+                z = 2.7 + (index % 5) * 0.22
+            elif course != "climb":
+                z = max(2.65, min(3.35, base_z + rng.uniform(-0.2, 0.2)))
+
+            gates.append({
+                "id": index + 1,
+                "pos": [float(x), float(y), float(z)],
+                "yaw": math.degrees(heading) % 360,
+                "type": gate_type,
+                "radius": RACE_HOOP_RADIUS_CM if gate_type == "hoop" else RACE_ARCH_RADIUS_CM,
+                "passed": False,
+            })
+            previous = [x, y]
+        return gates
+
+    def _race_course_curve(self, gates, samples_per_segment=12):
+        points = [gate["pos"] for gate in gates]
+        if len(points) < 2:
+            return [list(point) for point in points]
+        curve = []
+        for index in range(len(points) - 1):
+            p0 = points[max(0, index - 1)]
+            p1 = points[index]
+            p2 = points[index + 1]
+            p3 = points[min(len(points) - 1, index + 2)]
+            for step in range(samples_per_segment):
+                t = step / samples_per_segment
+                t2 = t * t
+                t3 = t2 * t
+                curve.append([
+                    0.5 * ((2 * p1[axis]) + (-p0[axis] + p2[axis]) * t + (2 * p0[axis] - 5 * p1[axis] + 4 * p2[axis] - p3[axis]) * t2 + (-p0[axis] + 3 * p1[axis] - 3 * p2[axis] + p3[axis]) * t3)
+                    for axis in range(3)
+                ])
+        curve.append(list(points[-1]))
+        return curve
+
+    def _race_course_max_turn_degrees(self, gates):
+        points = [gate["pos"] for gate in gates]
+        if len(points) < 3:
+            return 0.0
+        max_turn = 0.0
+        for index in range(1, len(points) - 1):
+            ax = points[index][0] - points[index - 1][0]
+            ay = points[index][1] - points[index - 1][1]
+            bx = points[index + 1][0] - points[index][0]
+            by = points[index + 1][1] - points[index][1]
+            a_len = math.hypot(ax, ay)
+            b_len = math.hypot(bx, by)
+            if a_len == 0 or b_len == 0:
+                continue
+            dot = max(-1.0, min(1.0, (ax * bx + ay * by) / (a_len * b_len)))
+            max_turn = max(max_turn, math.degrees(math.acos(dot)))
+        return max_turn
+
+    def set_race_hints(self, distance: Optional[bool] = None, height: Optional[bool] = None, relative: Optional[bool] = None):
+        hints = dict(self.drone.get("race_hints", {}))
+        for key, value in {"distance": distance, "height": height, "relative": relative}.items():
+            if value is not None:
+                hints[key] = bool(value)
+        self.drone["race_hints"] = hints
+        self._render_frame(apply_wind=False)
+
+    def set_camera_follow(self, enabled=True):
+        if self.simulation is not None:
+            self.simulation.set_camera_follow(enabled)
+            if enabled:
+                self.simulation.camera_x = self.drone["pos"][0]
+                self.simulation.camera_y = self.drone["pos"][1]
+            self._render_frame(apply_wind=False)
+
+    def set_camera_overview(self):
+        if self.simulation is not None:
+            self.simulation.set_camera_overview()
+            self._render_frame(apply_wind=False)
+
+    def clear_race_gates(self):
+        self.drone["race_gates"] = []
+        self.drone["race_next_gate"] = 0
+        self.drone["race_completed"] = False
+        self.drone["race_last_pos"] = list(self.drone["pos"])
+        self._render_frame(apply_wind=False)
+
+    def get_race_gates(self):
+        return list(self.drone.get("race_gates", []))
+
+    def get_next_race_gate(self):
+        gates = self.drone.get("race_gates", [])
+        next_index = self.drone.get("race_next_gate", 0)
+        if next_index >= len(gates):
+            return None
+        return gates[next_index]
+
+    def get_race_gate_measurements(self):
+        gate = self.get_next_race_gate()
+        if gate is None:
+            return None
+        return self._race_gate_measurement(gate)
+
+    def _race_gate_measurement(self, gate, pos=None):
+        pos = self.drone["pos"] if pos is None else pos
+        yaw = math.radians(gate["yaw"])
+        dx = pos[0] - gate["pos"][0]
+        dy = pos[1] - gate["pos"][1]
+        dz_cm = int(round((pos[2] - gate["pos"][2]) * 100))
+        ahead_cm = int(round(dx * math.sin(yaw) + dy * math.cos(yaw)))
+        side_cm = int(round(dx * math.cos(yaw) - dy * math.sin(yaw)))
+        return {
+            "gate": gate["id"],
+            "height_cm": int(round((gate["pos"][2] - 1.0) * 100)),
+            "relative_x_cm": int(round(gate["pos"][0] - pos[0])),
+            "relative_y_cm": int(round(gate["pos"][1] - pos[1])),
+            "relative_z_cm": int(round((gate["pos"][2] - pos[2]) * 100)),
+            "ahead_cm": ahead_cm,
+            "side_cm": side_cm,
+            "vertical_cm": dz_cm,
+            "distance_cm": int(round(math.sqrt(dx * dx + dy * dy + dz_cm * dz_cm))),
+            "yaw_degrees": int(round(gate["yaw"])),
+            "type": gate.get("type", "hoop"),
+            "radius_cm": gate.get("radius", RACE_HOOP_RADIUS_CM),
+        }
+
+    def _update_race_gate_progress(self):
+        gates = self.drone.get("race_gates", [])
+        next_index = self.drone.get("race_next_gate", 0)
+        if not gates or next_index >= len(gates):
+            self.drone["race_last_pos"] = list(self.drone["pos"])
+            return
+
+        gate = gates[next_index]
+        previous = self.drone.get("race_last_pos", self.drone["pos"])
+        current = self.drone["pos"]
+        prev_measure = self._race_gate_measurement(gate, previous)
+        current_measure = self._race_gate_measurement(gate, current)
+        crossed_plane = prev_measure["ahead_cm"] < 0 <= current_measure["ahead_cm"]
+        radius = gate.get("radius", RACE_HOOP_RADIUS_CM)
+        if gate.get("type") == "arch":
+            inside_opening = current_measure["vertical_cm"] >= 0 and math.hypot(current_measure["side_cm"], current_measure["vertical_cm"]) <= radius
+        else:
+            inside_opening = math.hypot(current_measure["side_cm"], current_measure["vertical_cm"]) <= radius
+
+        if crossed_plane and inside_opening:
+            gate["passed"] = True
+            next_index += 1
+            self.drone["race_next_gate"] = next_index
+            self.drone["race_completed"] = next_index >= len(gates)
+
+        self.drone["race_last_pos"] = list(current)
 
     def _sleep_with_visual(self, seconds):
         end = time.time() + seconds
@@ -372,6 +589,27 @@ class Tello:
                 self.drone["video_direction"] = int(parts[1])
             elif op == "ext":
                 self._handle_expansion(parts[1:])
+            elif op == "racegates":
+                count = int(parts[1]) if len(parts) > 1 else 5
+                course = "line"
+                seed = None
+                if len(parts) > 2:
+                    try:
+                        seed = int(parts[2])
+                    except ValueError:
+                        course = parts[2]
+                if len(parts) > 3:
+                    seed = int(parts[3])
+                self.setup_race_gates(count, course, seed)
+            elif op == "cleargates":
+                self.clear_race_gates()
+            elif op == "racehints":
+                self._handle_race_hints(parts[1:])
+            elif op == "camerafollow":
+                enabled = len(parts) < 2 or parts[1].lower() in {"1", "true", "on", "yes"}
+                self.set_camera_follow(enabled)
+            elif op == "cameraoverview":
+                self.set_camera_overview()
             elif command.endswith("?"):
                 return self._query(command)
             else:
@@ -407,6 +645,22 @@ class Tello:
         elif parts[0].lower() == "mled":
             pattern = "".join(parts[2:]) if len(parts) >= 3 and len("".join(parts[2:])) >= 64 else "".join(parts[1:])
             self.drone["mled"] = pattern[:64].ljust(64, "0")
+
+    def _handle_race_hints(self, parts):
+        if not parts:
+            return
+        hints = dict(self.drone.get("race_hints", {}))
+        if parts[0].lower() == "off":
+            hints = {key: False for key in hints}
+        elif parts[0].lower() == "on":
+            hints = {key: True for key in hints}
+        else:
+            value = True
+            if len(parts) > 1:
+                value = parts[1].lower() in {"1", "true", "on", "yes"}
+            if parts[0].lower() in hints:
+                hints[parts[0].lower()] = value
+        self.drone["race_hints"] = hints
 
     def connect(self, wait_for_state=True):
         self._connected = True

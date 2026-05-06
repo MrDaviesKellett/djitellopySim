@@ -11,6 +11,10 @@ BACKGROUND = (14, 18, 22)
 GRID_COLOR = (38, 46, 54)
 FLOOR_COLOR = (25, 31, 36)
 ALTITUDE_COLOR = (94, 234, 212)
+GATE_PENDING = (251, 191, 36)
+GATE_ACTIVE = (56, 189, 248)
+GATE_PASSED = (74, 222, 128)
+GATE_SHADOW = (5, 8, 12)
 
 
 class sim:
@@ -26,6 +30,11 @@ class sim:
         self._noise_y = 0
         self._noise_z = 0
         self._noise_t = 0
+        self.camera_mode = "follow"
+        self.camera_x = self.width / 2
+        self.camera_y = self.height / 2
+        self.camera_zoom = 1.0
+        self.show_keymap = True
         self.screen = pygame.display.set_mode((self.width, self.height))
         pygame.display.set_caption("Tello Simulation - 3D")
         self.render_frame(apply_wind=False)
@@ -36,6 +45,28 @@ class sim:
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 self.quit()
+            elif event.type == pygame.KEYDOWN:
+                self._handle_keydown(event.key)
+
+    def _handle_keydown(self, key):
+        if key == pygame.K_f:
+            self.set_camera_follow(True)
+        elif key == pygame.K_o:
+            self.set_camera_overview()
+        elif key in {pygame.K_EQUALS, pygame.K_PLUS, pygame.K_KP_PLUS}:
+            self.camera_zoom = min(2.5, self.camera_zoom * 1.15)
+        elif key in {pygame.K_MINUS, pygame.K_KP_MINUS}:
+            self.camera_zoom = max(0.12, self.camera_zoom / 1.15)
+        elif key == pygame.K_k:
+            self.show_keymap = not self.show_keymap
+        elif self.tellos and key in {pygame.K_d, pygame.K_h, pygame.K_r}:
+            hints = self.tellos[0].drone.get("race_hints", {})
+            if key == pygame.K_d:
+                hints["distance"] = not hints.get("distance", False)
+            elif key == pygame.K_h:
+                hints["height"] = not hints.get("height", False)
+            elif key == pygame.K_r:
+                hints["relative"] = not hints.get("relative", False)
 
     def register(self, tello):
         with self._lock:
@@ -55,10 +86,50 @@ class sim:
     def _can_use_pygame(self):
         return self.running and threading.get_ident() == self._main_thread_id
 
+    def set_camera_follow(self, enabled=True):
+        self.camera_mode = "follow" if enabled else "static"
+        if enabled:
+            self.camera_zoom = 1.0
+
+    def set_camera_overview(self):
+        self.camera_mode = "overview"
+
     def _world_to_screen(self, x, y, z):
-        sx = self.width / 2 + (x - self.width / 2) * 0.72 - (y - self.height / 2) * 0.28
-        sy = self.height * 0.74 + (x - self.width / 2) * 0.18 + (y - self.height / 2) * 0.42 - z * 112
+        sx = self.width / 2 + ((x - self.camera_x) * 0.72 - (y - self.camera_y) * 0.28) * self.camera_zoom
+        sy = self.height * 0.68 + ((x - self.camera_x) * 0.18 + (y - self.camera_y) * 0.42 - z * 112) * self.camera_zoom
         return sx, sy
+
+    def _update_camera(self, tellos):
+        if not tellos:
+            return
+        lead = tellos[0]
+        if self.camera_mode == "follow":
+            self.camera_x += (lead.drone["pos"][0] - self.camera_x) * 0.18
+            self.camera_y += (lead.drone["pos"][1] - self.camera_y) * 0.18
+        elif self.camera_mode == "overview":
+            points = [lead.drone["pos"]]
+            for tello in tellos:
+                for gate in tello.drone.get("race_gates", []):
+                    x, y, _ = gate["pos"]
+                    radius = gate.get("radius", 190)
+                    points.extend([[x - radius, y], [x + radius, y], [x, y - radius], [x, y + radius]])
+            min_x = min(point[0] for point in points)
+            max_x = max(point[0] for point in points)
+            min_y = min(point[1] for point in points)
+            max_y = max(point[1] for point in points)
+            self.camera_x = (min_x + max_x) / 2
+            self.camera_y = (min_y + max_y) / 2
+
+            projected = []
+            old_zoom = self.camera_zoom
+            self.camera_zoom = 1.0
+            for point in points:
+                projected.append(self._world_to_screen(point[0], point[1], 0))
+            self.camera_zoom = old_zoom
+            span_x = max(px for px, _ in projected) - min(px for px, _ in projected)
+            span_y = max(py for _, py in projected) - min(py for _, py in projected)
+            target_zoom = min((self.width * 0.78) / max(span_x, 1), (self.height * 0.72) / max(span_y, 1), 1.0)
+            self.camera_zoom += (max(0.12, target_zoom) - self.camera_zoom) * 0.25
 
     def _rotate_point(self, x, y, z, yaw, pitch, roll):
         cy, sy = math.cos(yaw), math.sin(yaw)
@@ -71,17 +142,137 @@ class sim:
         return x, y, z
 
     def _draw_grid(self):
-        horizon = int(self.height * 0.2)
+        horizon = 0
         pygame.draw.rect(self.screen, FLOOR_COLOR, pygame.Rect(0, horizon, self.width, self.height - horizon))
         if not GRID:
             return
-        for value in range(-800, 1800, GRID):
-            start = self._world_to_screen(value, -600, 0)
-            end = self._world_to_screen(value, 1600, 0)
+        grid_x = int(self.camera_x // GRID) * GRID
+        grid_y = int(self.camera_y // GRID) * GRID
+        for value in range(grid_x - 1800, grid_x + 1900, GRID):
+            start = self._world_to_screen(value, grid_y - 1800, 0)
+            end = self._world_to_screen(value, grid_y + 1900, 0)
             pygame.draw.line(self.screen, GRID_COLOR, start, end, 1)
-            start = self._world_to_screen(-800, value, 0)
-            end = self._world_to_screen(1800, value, 0)
+        for value in range(grid_y - 1800, grid_y + 1900, GRID):
+            start = self._world_to_screen(grid_x - 1800, value, 0)
+            end = self._world_to_screen(grid_x + 1900, value, 0)
             pygame.draw.line(self.screen, GRID_COLOR, start, end, 1)
+
+    def _draw_race_curve(self, tello):
+        curve = tello.drone.get("race_curve", [])
+        if len(curve) < 2:
+            return
+        points = [(int(x), int(y)) for x, y in (self._world_to_screen(point[0], point[1], max(point[2], 1.0)) for point in curve)]
+        pygame.draw.lines(self.screen, (76, 91, 108), False, points, 2)
+
+    def _draw_race_gate(self, tello, gate, active=False):
+        x, y, z = gate["pos"]
+        yaw = math.radians(gate["yaw"])
+        side_x = math.cos(yaw)
+        side_y = -math.sin(yaw)
+        radius = gate.get("radius", 320)
+        color = GATE_PASSED if gate.get("passed") else GATE_ACTIVE if active else GATE_PENDING
+        width = 6 if active else 4
+
+        if gate.get("type") == "arch":
+            angles = [math.pi * step / 24 for step in range(25)]
+            points = [
+                self._world_to_screen(
+                    x + side_x * math.cos(angle) * radius,
+                    y + side_y * math.cos(angle) * radius,
+                    z + math.sin(angle) * radius / 100,
+                )
+                for angle in angles
+            ]
+            base_l = self._world_to_screen(x - side_x * radius, y - side_y * radius, z)
+            base_r = self._world_to_screen(x + side_x * radius, y + side_y * radius, z)
+            pygame.draw.line(self.screen, GATE_SHADOW, (int(base_l[0]), int(base_l[1])), (int(base_r[0]), int(base_r[1])), 8)
+            pygame.draw.lines(self.screen, color, False, [(int(px), int(py)) for px, py in points], width)
+            pygame.draw.line(self.screen, color, (int(base_l[0]), int(base_l[1])), (int(base_l[0]), int(base_l[1] - 8)), width)
+            pygame.draw.line(self.screen, color, (int(base_r[0]), int(base_r[1])), (int(base_r[0]), int(base_r[1] - 8)), width)
+            label_anchor = points[12]
+        else:
+            angles = [math.tau * step / 48 for step in range(49)]
+            points = [
+                self._world_to_screen(
+                    x + side_x * math.cos(angle) * radius,
+                    y + side_y * math.cos(angle) * radius,
+                    z + math.sin(angle) * radius / 100,
+                )
+                for angle in angles
+            ]
+            pole_top = self._world_to_screen(x, y, z - radius / 100)
+            pole_base = self._world_to_screen(x, y, 0)
+            shadow_l = self._world_to_screen(x - side_x * radius, y - side_y * radius, 0)
+            shadow_r = self._world_to_screen(x + side_x * radius, y + side_y * radius, 0)
+            pygame.draw.line(self.screen, GATE_SHADOW, (int(shadow_l[0]), int(shadow_l[1])), (int(shadow_r[0]), int(shadow_r[1])), 8)
+            pygame.draw.line(self.screen, (128, 138, 148), (int(pole_base[0]), int(pole_base[1])), (int(pole_top[0]), int(pole_top[1])), 4)
+            pygame.draw.lines(self.screen, color, False, [(int(px), int(py)) for px, py in points], width)
+            label_anchor = self._world_to_screen(x, y, z + radius / 100 + 0.18)
+
+        font = pygame.font.Font(None, 24)
+        label = font.render(str(gate["id"]), True, color)
+        self.screen.blit(label, (int(label_anchor[0] - label.get_width() / 2), int(label_anchor[1] - label.get_height() / 2)))
+
+        if active:
+            self._draw_gate_hints(tello, gate, label_anchor)
+
+    def _draw_gate_hints(self, tello, gate, anchor):
+        hints = tello.drone.get("race_hints", {})
+        if not any(hints.values()):
+            return
+
+        measurement = tello.get_race_gate_measurements()
+        if not measurement:
+            return
+
+        parts = []
+        if hints.get("distance"):
+            parts.append(f"{measurement['distance_cm']} cm")
+        if hints.get("height") and gate.get("type") == "hoop":
+            parts.append(f"h {measurement['height_cm']} cm")
+        if hints.get("relative"):
+            parts.append(f"x {measurement['relative_x_cm']} y {measurement['relative_y_cm']} z {measurement['relative_z_cm']}")
+        if not parts:
+            return
+
+        font = pygame.font.Font(None, 20)
+        rendered = font.render(" | ".join(parts), True, (226, 232, 240))
+        x = int(anchor[0] - rendered.get_width() / 2)
+        y = int(anchor[1] + 18)
+        bg = pygame.Rect(x - 5, y - 3, rendered.get_width() + 10, rendered.get_height() + 6)
+        pygame.draw.rect(self.screen, (8, 12, 16), bg, border_radius=3)
+        pygame.draw.rect(self.screen, (66, 78, 91), bg, 1, border_radius=3)
+        self.screen.blit(rendered, (x, y))
+
+    def _draw_race_gates(self, tello):
+        gates = tello.drone.get("race_gates", [])
+        next_gate = tello.drone.get("race_next_gate", 0)
+        for index, gate in enumerate(gates):
+            self._draw_race_gate(tello, gate, active=index == next_gate)
+
+    def _draw_keymap(self):
+        if not self.show_keymap:
+            return
+        font = pygame.font.Font(None, 20)
+        lines = [
+            "F follow camera",
+            "O overview camera",
+            "+/- zoom",
+            "D distance hint",
+            "H height hint",
+            "R relative hint",
+            "K hide keys",
+        ]
+        rendered = [font.render(line, True, (214, 222, 232)) for line in lines]
+        width = max(item.get_width() for item in rendered) + 18
+        height = len(rendered) * 20 + 14
+        panel = pygame.Rect(self.width - width - 14, 14, width, height)
+        pygame.draw.rect(self.screen, (8, 12, 16), panel, border_radius=4)
+        pygame.draw.rect(self.screen, (70, 82, 96), panel, 1, border_radius=4)
+        y = panel.y + 8
+        for item in rendered:
+            self.screen.blit(item, (panel.x + 9, y))
+            y += 20
 
     def _project_drone_points(self, tello):
         pos = tello.drone["pos"]
@@ -218,11 +409,13 @@ class sim:
         else:
             self._noise_x = self._noise_y = self._noise_z = self._noise_t = 0
 
-        self.screen.fill(BACKGROUND)
-        self._draw_grid()
-
         with self._lock:
             tellos = list(self.tellos)
+
+        self._update_camera(tellos)
+
+        self.screen.fill(BACKGROUND)
+        self._draw_grid()
 
         for tello in tellos:
             if apply_wind and tello.is_flying and tello.is_windy:
@@ -230,6 +423,10 @@ class sim:
                 tello.drone["pos"][1] += self._noise_y
                 tello.drone["pos"][2] = max(1.0, tello.drone["pos"][2] + self._noise_z * 0.01)
                 tello.drone["rot"] += self._noise_t * 0.03
+
+            tello._update_race_gate_progress()
+            self._draw_race_curve(tello)
+            self._draw_race_gates(tello)
 
             tello.flightPathTaken.append(tuple(tello.drone["pos"]))
             if len(tello.flightPathTaken) > 2000:
@@ -244,6 +441,7 @@ class sim:
             if tello.drone.get("flip", 0) > 0:
                 tello.drone["flip"] -= 1
 
+        self._draw_keymap()
         pygame.display.flip()
 
     def update_visual(self, windAmt=0.3):

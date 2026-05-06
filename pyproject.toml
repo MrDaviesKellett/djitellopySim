@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "djitellopy-sim"
-version = "0.2.4"
+version = "0.2.5"
 description = "A local DJI Tello simulator with a djitellopy-compatible Python API and 3D Pygame renderer."
 readme = "README.md"
 requires-python = ">=3.10"
