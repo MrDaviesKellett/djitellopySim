@@ -184,7 +184,10 @@ tello.connect()
 
 tello.setup_race_gates(count=5, course="line", seed=3)
 tello.set_camera_overview()
-tello.set_race_hints(distance=True, height=True, relative=True)
+tello.set_race_hints(distance=True, height=True, relative=True, forward=True)
+
+print(tello.measure_drone_to_gate(1))
+print(tello.measure_gate_to_gate(1, 2))
 
 tello.takeoff()
 tello.move_forward(250)
@@ -251,6 +254,7 @@ In the simulator window:
 | `D` | Show or hide distance hints |
 | `H` | Show or hide height hints |
 | `R` | Show or hide relative-position hints |
+| `V` | Show or hide the drone forward vector |
 
 ## 11. Expansion LED And Matrix LED
 
@@ -267,19 +271,26 @@ Set the 8 by 8 matrix LED:
 ```python
 heart = (
     "00000000"
-    "01100110"
-    "11111111"
-    "11111111"
-    "01111110"
-    "00111100"
-    "00011000"
+    "0rr00rr0"
+    "rppppppr"
+    "rppppppr"
+    "0bppppb0"
+    "00bbbb00"
+    "000bb000"
     "00000000"
 )
 
 tello.send_expansion_command("mled " + heart)
 ```
 
-The matrix is drawn above the drone. It is an 8 by 8 grid.
+The matrix is drawn above the drone. It is an 8 by 8 grid. Use:
+
+| Value | Colour |
+| --- | --- |
+| `0` | Black/off |
+| `r` | Red |
+| `b` | Blue |
+| `p` | Purple |
 
 ## 12. Common Problems
 

@@ -13,8 +13,8 @@ from physicsSim import sim
 
 PI = math.pi
 SIMULATION = None
-RACE_HOOP_RADIUS_CM = 145
-RACE_ARCH_RADIUS_CM = 380
+RACE_HOOP_RADIUS_CM = 110
+RACE_ARCH_RADIUS_CM = 300
 RACE_MAX_TURN_DEGREES = 110
 
 
@@ -24,6 +24,7 @@ class TelloException(Exception):
 
 class BackgroundFrameRead:
     def __init__(self, tello, with_queue=False, maxsize=32):
+        """Create and initialise this object."""
         self.tello = tello
         self.with_queue = with_queue
         self.frames = deque([], maxsize)
@@ -42,9 +43,11 @@ class BackgroundFrameRead:
         return frame
 
     def start(self):
+        """Start background work and return this object when appropriate."""
         self.worker.start()
 
     def update_frame(self):
+        """Continuously update the simulated video frame."""
         while not self.stopped:
             frame = self._make_frame()
             if self.with_queue:
@@ -55,6 +58,7 @@ class BackgroundFrameRead:
             time.sleep(1 / 30)
 
     def get_queued_frame(self):
+        """Return the next queued frame, or None when the queue is empty."""
         with self.lock:
             try:
                 return self.frames.popleft()
@@ -63,6 +67,7 @@ class BackgroundFrameRead:
 
     @property
     def frame(self):
+        """Return the latest simulated video frame."""
         if self.with_queue:
             return self.get_queued_frame()
         with self.lock:
@@ -70,10 +75,12 @@ class BackgroundFrameRead:
 
     @frame.setter
     def frame(self, value):
+        """Return the latest simulated video frame."""
         with self.lock:
             self._frame = value
 
     def stop(self):
+        """Stop background frame reading."""
         self.stopped = True
 
 
@@ -122,6 +129,7 @@ class Tello:
     state_field_converters.update({key: float for key in FLOAT_STATE_FIELDS})
 
     def __init__(self, host=TELLO_IP, retry_count=RETRY_COUNT, vs_udp=VS_UDP_PORT, swarm=False, start_visual=True):
+        """Create and initialise this object."""
         global SIMULATION
         self.flightPathTaken = []
         self.address = (host, Tello.CONTROL_UDP_PORT)
@@ -172,13 +180,15 @@ class Tello:
             "race_next_gate": 0,
             "race_completed": False,
             "race_last_pos": [500.0, 400.0, 1.0],
-            "race_hints": {"distance": True, "height": False, "relative": False},
+            "race_hints": {"distance": True, "height": False, "relative": False, "forward": False},
             "race_timer_start": None,
             "race_elapsed_seconds": 0.0,
             "race_penalty_seconds": 0.0,
             "race_missed_gates": 0,
             "race_wrong_order_gates": 0,
             "race_final_time_seconds": None,
+            "race_score": 0,
+            "race_show_summary": False,
         }
         self._state = {}
         self._update_state()
@@ -199,6 +209,7 @@ class Tello:
             self._sleep_with_visual(uniform(min_delay, max_delay))
 
     def simLat(self, min=0.1, max=0.5):
+        """Add simulated command latency between the given minimum and maximum seconds."""
         self._simulate_latency(min, max)
 
     def _render_frame(self, apply_wind=True):
@@ -206,7 +217,15 @@ class Tello:
             self._update_race_gate_progress()
             self.simulation.render_frame(apply_wind=apply_wind)
 
-    def setup_race_gates(self, count: int = 5, course: str = "line", seed: Optional[int] = None):
+    def setup_race_gates(
+        self,
+        count: int = 5,
+        course: str = "line",
+        seed: Optional[int] = None,
+        min_randomness: float = 0,
+        max_randomness: float = 35,
+    ):
+        """Create a flyable race-gate course and return the generated gates."""
         if isinstance(course, int) and seed is None:
             seed = course
             course = "line"
@@ -220,10 +239,15 @@ class Tello:
             course = "line"
 
         gates = []
+        min_randomness = max(0.0, float(min_randomness))
+        max_randomness = max(min_randomness, float(max_randomness))
+
         for _ in range(30):
-            gates = self._generate_race_course(count, course, rng, start)
+            gates = self._generate_race_course(count, course, rng, start, min_randomness, max_randomness)
             if self._race_course_max_turn_degrees(gates) <= RACE_MAX_TURN_DEGREES:
                 break
+
+        self._align_gate_yaws_to_course(gates)
 
         self.drone["race_gates"] = gates
         self.drone["race_curve"] = self._race_course_curve(gates)
@@ -235,14 +259,14 @@ class Tello:
         self._render_frame(apply_wind=False)
         return gates
 
-    def _generate_race_course(self, count, course, rng, start):
+    def _generate_race_course(self, count, course, rng, start, min_randomness, max_randomness):
         templates = {
-            "line": [(650, 0), (1300, 0), (1950, 0), (2600, 0), (3250, 0), (3900, 0), (4550, 0), (5200, 0)],
-            "slalom": [(620, -280), (1240, 280), (1860, -280), (2480, 280), (3100, -280), (3720, 280), (4340, -180), (4960, 0)],
-            "loop": [(760, 0), (1120, 620), (780, 1240), (80, 1500), (-640, 1180), (-980, 480), (-720, -260), (20, -620), (760, -320), (1080, 360)],
-            "climb": [(620, -150), (1240, 120), (1860, -120), (2480, 160), (3100, -80), (3720, 180), (4340, 0), (4960, 120)],
-            "arches": [(1050, 0), (2100, 0), (3150, 0), (4200, 0), (5250, 320), (6300, 320), (7350, 40), (8400, -260)],
-            "mixed": [(760, -260), (1520, 240), (2480, -220), (3360, 260), (4320, -120), (5200, 320), (6160, 0), (7040, -260)],
+            "line": [(420, 0), (840, 0), (1260, 0), (1680, 0), (2100, 0), (2520, 0), (2940, 0), (3360, 0)],
+            "slalom": [(450, -170), (900, 170), (1350, -170), (1800, 170), (2250, -170), (2700, 170), (3150, -120), (3600, 0)],
+            "loop": [(520, 0), (760, 420), (520, 820), (40, 980), (-430, 760), (-650, 320), (-460, -160), (20, -390), (500, -220), (720, 240)],
+            "climb": [(430, -100), (860, 80), (1290, -80), (1720, 105), (2150, -50), (2580, 120), (3010, 0), (3440, 80)],
+            "arches": [(760, 0), (1520, 0), (2280, 0), (3040, 0), (3800, 220), (4560, 220), (5320, 40), (6080, -180)],
+            "mixed": [(520, -170), (1040, 160), (1660, -150), (2240, 170), (2860, -80), (3440, 220), (4060, 0), (4640, -170)],
         }
         offsets = templates[course]
         course_yaw = math.radians(self.drone["rot"])
@@ -260,8 +284,14 @@ class Tello:
             elif course == "mixed":
                 gate_type = "arch" if index % 3 == 2 else "hoop"
 
-            x = start[0] + forward * forward_x + right * right_x + rng.uniform(-35, 35)
-            y = start[1] + forward * forward_y + right * right_y + rng.uniform(-35, 35)
+            jitter = rng.uniform(min_randomness, max_randomness)
+            if rng.choice([True, False]):
+                jitter = -jitter
+            x = start[0] + forward * forward_x + right * right_x + jitter
+            jitter = rng.uniform(min_randomness, max_randomness)
+            if rng.choice([True, False]):
+                jitter = -jitter
+            y = start[1] + forward * forward_y + right * right_y + jitter
             heading = math.atan2(x - previous[0], y - previous[1])
 
             if gate_type == "arch":
@@ -282,6 +312,23 @@ class Tello:
             })
             previous = [x, y]
         return gates
+
+    def _align_gate_yaws_to_course(self, gates):
+        if not gates:
+            return
+        for index, gate in enumerate(gates):
+            if len(gates) == 1:
+                continue
+            if index == 0:
+                before = gate["pos"]
+                after = gates[index + 1]["pos"]
+            elif index == len(gates) - 1:
+                before = gates[index - 1]["pos"]
+                after = gate["pos"]
+            else:
+                before = gates[index - 1]["pos"]
+                after = gates[index + 1]["pos"]
+            gate["yaw"] = math.degrees(math.atan2(after[0] - before[0], after[1] - before[1])) % 360
 
     def _race_course_curve(self, gates, samples_per_segment=12):
         points = [gate["pos"] for gate in gates]
@@ -322,28 +369,39 @@ class Tello:
             max_turn = max(max_turn, math.degrees(math.acos(dot)))
         return max_turn
 
-    def set_race_hints(self, distance: Optional[bool] = None, height: Optional[bool] = None, relative: Optional[bool] = None):
+    def set_race_hints(
+        self,
+        distance: Optional[bool] = None,
+        height: Optional[bool] = None,
+        relative: Optional[bool] = None,
+        forward: Optional[bool] = None,
+    ):
+        """Show or hide in-view race hints such as distance, height, and heading."""
         hints = dict(self.drone.get("race_hints", {}))
-        for key, value in {"distance": distance, "height": height, "relative": relative}.items():
+        for key, value in {"distance": distance, "height": height, "relative": relative, "forward": forward}.items():
             if value is not None:
                 hints[key] = bool(value)
         self.drone["race_hints"] = hints
         self._render_frame(apply_wind=False)
 
     def set_camera_follow(self, enabled=True):
+        """Turn the simulator follow camera on or off."""
         if self.simulation is not None:
             self.simulation.set_camera_follow(enabled)
             if enabled:
                 self.simulation.camera_x = self.drone["pos"][0]
                 self.simulation.camera_y = self.drone["pos"][1]
+                self.simulation.camera_z = self.drone["pos"][2]
             self._render_frame(apply_wind=False)
 
     def set_camera_overview(self):
+        """Switch the simulator camera to a zoomed-out course overview."""
         if self.simulation is not None:
             self.simulation.set_camera_overview()
             self._render_frame(apply_wind=False)
 
     def clear_race_gates(self):
+        """Remove all race gates and reset race progress."""
         self.drone["race_gates"] = []
         self.drone["race_curve"] = []
         self.drone["race_next_gate"] = 0
@@ -353,9 +411,11 @@ class Tello:
         self._render_frame(apply_wind=False)
 
     def get_race_gates(self):
+        """Return the generated race gates."""
         return list(self.drone.get("race_gates", []))
 
     def get_next_race_gate(self):
+        """Return the next race gate the drone should pass through."""
         gates = self.drone.get("race_gates", [])
         next_index = self.drone.get("race_next_gate", 0)
         if next_index >= len(gates):
@@ -363,10 +423,52 @@ class Tello:
         return gates[next_index]
 
     def get_race_gate_measurements(self):
+        """Return distance and angle measurements from the drone to the next gate."""
         gate = self.get_next_race_gate()
         if gate is None:
             return None
+        return self.measure_drone_to_gate(gate["id"])
+
+    def measure_drone_to_gate(self, gate_id=None):
+        """Measure distance and angle from the drone to one race gate."""
+        gates = self.drone.get("race_gates", [])
+        if not gates:
+            return None
+        if gate_id is None:
+            gate = self.get_next_race_gate()
+        else:
+            gate = next((item for item in gates if item["id"] == gate_id), None)
+        if gate is None:
+            return None
         return self._race_gate_measurement(gate)
+
+    def measure_gate_to_gate(self, from_gate_id, to_gate_id=None):
+        """Measure distance and turn angle from one race gate to another."""
+        gates = self.drone.get("race_gates", [])
+        from_gate = next((item for item in gates if item["id"] == from_gate_id), None)
+        if from_gate is None:
+            return None
+        if to_gate_id is None:
+            to_gate_id = from_gate_id + 1
+        to_gate = next((item for item in gates if item["id"] == to_gate_id), None)
+        if to_gate is None:
+            return None
+        dx = to_gate["pos"][0] - from_gate["pos"][0]
+        dy = to_gate["pos"][1] - from_gate["pos"][1]
+        dz_cm = (to_gate["pos"][2] - from_gate["pos"][2]) * 100
+        heading = math.degrees(math.atan2(dx, dy)) % 360
+        relative_angle = ((heading - from_gate["yaw"] + 180) % 360) - 180
+        return {
+            "from_gate": from_gate["id"],
+            "to_gate": to_gate["id"],
+            "distance_cm": int(round(math.sqrt(dx * dx + dy * dy + dz_cm * dz_cm))),
+            "flat_distance_cm": int(round(math.hypot(dx, dy))),
+            "relative_x_cm": int(round(dx)),
+            "relative_y_cm": int(round(dy)),
+            "relative_z_cm": int(round(dz_cm)),
+            "heading_degrees": int(round(heading)),
+            "angle_from_gate_forward_degrees": int(round(relative_angle)),
+        }
 
     def _race_gate_measurement(self, gate, pos=None):
         pos = self.drone["pos"] if pos is None else pos
@@ -374,6 +476,10 @@ class Tello:
         dx = pos[0] - gate["pos"][0]
         dy = pos[1] - gate["pos"][1]
         dz_cm = int(round((pos[2] - gate["pos"][2]) * 100))
+        to_gate_x = gate["pos"][0] - pos[0]
+        to_gate_y = gate["pos"][1] - pos[1]
+        heading = math.degrees(math.atan2(to_gate_x, to_gate_y)) % 360
+        angle_from_drone = ((heading - self.drone["rot"] + 180) % 360) - 180
         ahead_cm = int(round(dx * math.sin(yaw) + dy * math.cos(yaw)))
         side_cm = int(round(dx * math.cos(yaw) - dy * math.sin(yaw)))
         return {
@@ -386,6 +492,9 @@ class Tello:
             "side_cm": side_cm,
             "vertical_cm": dz_cm,
             "distance_cm": int(round(math.sqrt(dx * dx + dy * dy + dz_cm * dz_cm))),
+            "flat_distance_cm": int(round(math.hypot(dx, dy))),
+            "heading_degrees": int(round(heading)),
+            "angle_from_drone_forward_degrees": int(round(angle_from_drone)),
             "yaw_degrees": int(round(gate["yaw"])),
             "type": gate.get("type", "hoop"),
             "radius_cm": gate.get("radius", RACE_HOOP_RADIUS_CM),
@@ -408,6 +517,7 @@ class Tello:
                 continue
             if index == next_index:
                 gate["passed"] = True
+                self.drone["race_score"] += 100
                 next_index += 1
                 self.drone["race_next_gate"] = next_index
                 self.drone["race_completed"] = next_index >= len(gates)
@@ -415,6 +525,7 @@ class Tello:
                 gate["wrong_order"] = True
                 self.drone["race_wrong_order_gates"] += 1
                 self.drone["race_penalty_seconds"] += 5
+                self.drone["race_score"] -= 50
 
         self.drone["race_last_pos"] = list(current)
 
@@ -435,6 +546,8 @@ class Tello:
         self.drone["race_missed_gates"] = 0
         self.drone["race_wrong_order_gates"] = 0
         self.drone["race_final_time_seconds"] = None
+        self.drone["race_score"] = 0
+        self.drone["race_show_summary"] = False
         for gate in self.drone.get("race_gates", []):
             gate["passed"] = False
             gate["wrong_order"] = False
@@ -457,9 +570,12 @@ class Tello:
         self.drone["race_missed_gates"] = missed
         self.drone["race_penalty_seconds"] = penalty
         self.drone["race_final_time_seconds"] = elapsed + penalty
+        self.drone["race_score"] -= missed * 100
+        self.drone["race_show_summary"] = True
         self.drone["race_timer_start"] = None
 
     def get_race_time(self):
+        """Return race timing, penalties, and score information."""
         start = self.drone.get("race_timer_start")
         elapsed = (time.time() - start) if start is not None else self.drone.get("race_elapsed_seconds", 0.0)
         penalty = self.drone.get("race_penalty_seconds", 0.0)
@@ -470,6 +586,7 @@ class Tello:
             "penalty_seconds": penalty,
             "missed_gates": self.drone.get("race_missed_gates", 0),
             "wrong_order_gates": self.drone.get("race_wrong_order_gates", 0),
+            "score": self.drone.get("race_score", 0),
             "final_time_seconds": elapsed + penalty if final_time is None else final_time,
         }
 
@@ -522,6 +639,7 @@ class Tello:
 
     @staticmethod
     def parse_state(state: str) -> Dict[str, Union[int, float, str]]:
+        """Convert a Tello state string into a dictionary."""
         state = state.strip()
         if state == "ok":
             return {}
@@ -542,18 +660,22 @@ class Tello:
         return state_dict
 
     def get_own_udp_object(self):
+        """Return the simulator UDP object placeholder."""
         return {"responses": [], "state": self.get_current_state()}
 
     def get_current_state(self) -> dict:
+        """Return the latest simulated drone state dictionary."""
         return dict(self._update_state())
 
     def get_state_field(self, key: str):
+        """Return one field from the latest simulated state."""
         state = self.get_current_state()
         if key not in state:
             raise TelloException(f"Could not get state property: {key}")
         return state[key]
 
     def send_command_with_return(self, command: str, timeout: int = RESPONSE_TIMEOUT) -> str:
+        """Send a command string and return the simulator response."""
         diff = time.time() - self.last_received_command_timestamp
         if diff < self.TIME_BTW_COMMANDS:
             time.sleep(diff)
@@ -564,10 +686,12 @@ class Tello:
         return response
 
     def send_command_without_return(self, command: str):
+        """Send a command string without waiting for a response."""
         self.LOGGER.info("Send command (no response expected): '%s'", command)
         self._handle_command(command, expect_response=False)
 
     def send_control_command(self, command: str, timeout: int = RESPONSE_TIMEOUT) -> bool:
+        """Send a command that should return ok and report success as a boolean."""
         response = "max retries exceeded"
         for _ in range(self.retry_count):
             response = self.send_command_with_return(command, timeout=timeout)
@@ -577,18 +701,22 @@ class Tello:
         return False
 
     def send_read_command(self, command: str) -> str:
+        """Send a read command and return its text response."""
         response = str(self.send_command_with_return(command))
         if any(word in response for word in ("error", "ERROR", "False")):
             self.raise_result_error(command, response)
         return response
 
     def send_read_command_int(self, command: str) -> int:
+        """Send a read command and return its response as an integer."""
         return int(self.send_read_command(command))
 
     def send_read_command_float(self, command: str) -> float:
+        """Send a read command and return its response as a float."""
         return float(self.send_read_command(command))
 
     def raise_result_error(self, command: str, response: str) -> bool:
+        """Raise TelloException if a command response is not ok."""
         tries = 1 + self.retry_count
         raise TelloException(f"Command '{command}' was unsuccessful for {tries} tries. Latest response:\t'{response}'")
 
@@ -658,6 +786,8 @@ class Tello:
                 count = int(parts[1]) if len(parts) > 1 else 5
                 course = "line"
                 seed = None
+                min_randomness = 0
+                max_randomness = 35
                 if len(parts) > 2:
                     try:
                         seed = int(parts[2])
@@ -665,7 +795,11 @@ class Tello:
                         course = parts[2]
                 if len(parts) > 3:
                     seed = int(parts[3])
-                self.setup_race_gates(count, course, seed)
+                if len(parts) > 4:
+                    min_randomness = float(parts[4])
+                if len(parts) > 5:
+                    max_randomness = float(parts[5])
+                self.setup_race_gates(count, course, seed, min_randomness, max_randomness)
             elif op == "cleargates":
                 self.clear_race_gates()
             elif op == "racehints":
@@ -728,6 +862,7 @@ class Tello:
         self.drone["race_hints"] = hints
 
     def connect(self, wait_for_state=True):
+        """Connect to the simulated drone command interface."""
         self._connected = True
         self.send_control_command("command")
         if wait_for_state:
@@ -735,18 +870,23 @@ class Tello:
             Tello.LOGGER.debug("'.connect()' received first state packet")
 
     def send_keepalive(self):
+        """Send a simulated keepalive command."""
         self.send_control_command("keepalive")
 
     def turn_motor_on(self):
+        """Turn the simulated motors on without taking off."""
         self.send_control_command("motoron")
 
     def turn_motor_off(self):
+        """Turn the simulated motors off."""
         self.send_control_command("motoroff")
 
     def initiate_throw_takeoff(self):
+        """Start simulated throw takeoff mode."""
         self.send_control_command("throwfly")
 
     def takeoff(self):
+        """Take off and start race timing when gates are present."""
         if self.is_flying:
             return
         self.LOGGER.info("sending takeoff command to drone")
@@ -758,6 +898,7 @@ class Tello:
         self._start_race_timer()
 
     def land(self, close_window=True):
+        """Land the drone and finish race timing."""
         self.LOGGER.info("sending land command to drone")
         self._simulate_latency()
         self._animate_to(z=1.0, speed=max(self.drone["speed"], 100))
@@ -765,13 +906,18 @@ class Tello:
         self.is_flying = False
         self._motors_on = False
         if close_window and not self.swarm and self.simulation is not None:
-            self.simulation.quit()
+            if self.drone.get("race_gates"):
+                self._render_frame(apply_wind=False)
+            else:
+                self.simulation.quit()
 
     def streamon(self):
+        """Turn on simulated video streaming."""
         self.send_control_command("streamon")
         self.stream_on = True
 
     def streamoff(self):
+        """Turn off simulated video streaming."""
         self.send_control_command("streamoff")
         self.stream_on = False
         if self.background_frame_read is not None:
@@ -779,6 +925,7 @@ class Tello:
             self.background_frame_read = None
 
     def emergency(self):
+        """Stop the drone immediately."""
         self.send_command_without_return("emergency")
         self.is_flying = False
         self._motors_on = False
@@ -796,6 +943,8 @@ class Tello:
         steps = int(max(max_diff / max(speed, 1) * 60, 1))
         yaw_delta = 0 if yaw is None else (yaw - self.drone["rot"]) / steps
         for _ in range(steps):
+            if self.simulation is not None and not self.simulation.running:
+                break
             self.drone["pos"][0] += diff[0] / steps
             self.drone["pos"][1] += diff[1] / steps
             self.drone["pos"][2] = max(1.0, self.drone["pos"][2] + diff[2] / steps)
@@ -811,6 +960,7 @@ class Tello:
         self._update_state()
 
     def move(self, direction: str, x: int):
+        """Move the drone in a named direction by centimetres."""
         self._require_flying()
         self.LOGGER.info("sending move command to drone in direction %s by %s", direction, x)
         self._simulate_latency()
@@ -838,18 +988,22 @@ class Tello:
         self._animate_to(target_x, target_y, target_z)
 
     def rotate(self, direction: str, x: int):
+        """Rotate the drone clockwise or counter-clockwise by degrees."""
         self._require_flying()
         self.LOGGER.info("sending rotate command to drone in direction %s by %s degrees", direction, x)
         self._simulate_latency()
-        delta = x if direction == "ccw" else -x
+        delta = x if direction == "cw" else -x
         steps = int(max(abs(delta / max(self.drone["speed"], 1) * 60), 1))
         for _ in range(steps):
+            if self.simulation is not None and not self.simulation.running:
+                break
             self.drone["rot"] += delta / steps
             self._render_frame()
             time.sleep(0.01)
         self._update_state()
 
     def flip(self, direction: str):
+        """Flip the drone in one of the Tello flip directions."""
         self._require_flying()
         if direction not in {"l", "r", "f", "b"}:
             raise TelloException(f"Unknown flip direction: {direction}")
@@ -857,49 +1011,65 @@ class Tello:
         self.drone["flip"] = 24
         self.drone["flip_direction"] = direction
         for _ in range(24):
+            if self.simulation is not None and not self.simulation.running:
+                break
             self._render_frame(apply_wind=False)
             time.sleep(1 / 60)
 
     def move_up(self, x: int):
+        """Move the drone up by centimetres."""
         self.move("up", x)
 
     def move_down(self, x: int):
+        """Move the drone down by centimetres."""
         self.move("down", x)
 
     def move_left(self, x: int):
+        """Move the drone left by centimetres."""
         self.move("left", x)
 
     def move_right(self, x: int):
+        """Move the drone right by centimetres."""
         self.move("right", x)
 
     def move_forward(self, x: int):
+        """Move the drone forward by centimetres."""
         self.move("forward", x)
 
     def move_back(self, x: int):
+        """Move the drone backward by centimetres."""
         self.move("back", x)
 
     def move_backward(self, x: int):
+        """Move the drone backward by centimetres."""
         self.move_back(x)
 
     def rotate_clockwise(self, x: int):
+        """Rotate the drone clockwise by degrees."""
         self.rotate("cw", x)
 
     def rotate_counter_clockwise(self, x: int):
+        """Rotate the drone counter-clockwise by degrees."""
         self.rotate("ccw", x)
 
     def flip_left(self):
+        """Flip the drone to the left."""
         self.flip("l")
 
     def flip_right(self):
+        """Flip the drone to the right."""
         self.flip("r")
 
     def flip_forward(self):
+        """Flip the drone forward."""
         self.flip("f")
 
     def flip_back(self):
+        """Flip the drone backward."""
         self.flip("b")
 
     def go_xyz_speed(self, x: int, y: int, z: int, speed: int):
+        """Move by relative x, y, z centimetres at the given speed."""
         self._require_flying()
         angle = math.radians(self.drone["rot"])
         dx = y * math.sin(angle) + x * math.sin(angle + math.pi / 2)
@@ -914,6 +1084,7 @@ class Tello:
             self.go_xyz_speed_mid(int(parts[1]), int(parts[2]), int(parts[3]), int(parts[4]), mid)
 
     def curve_xyz_speed(self, x1: int, y1: int, z1: int, x2: int, y2: int, z2: int, speed: int):
+        """Approximate a curved move through two relative points."""
         self.go_xyz_speed(x1, y1, z1, speed)
         self.go_xyz_speed(x2 - x1, y2 - y1, z2 - z1, speed)
 
@@ -926,29 +1097,37 @@ class Tello:
             self.curve_xyz_speed_mid(*args, mid)
 
     def go_xyz_speed_mid(self, x: int, y: int, z: int, speed: int, mid: int):
+        """Mission-pad version of go_xyz_speed kept for compatibility."""
         self.go_xyz_speed(x, y, z, speed)
 
     def curve_xyz_speed_mid(self, x1: int, y1: int, z1: int, x2: int, y2: int, z2: int, speed: int, mid: int):
+        """Mission-pad version of curve_xyz_speed kept for compatibility."""
         self.curve_xyz_speed(x1, y1, z1, x2, y2, z2, speed)
 
     def go_xyz_speed_yaw_mid(self, x: int, y: int, z: int, speed: int, yaw: int, mid1: int, mid2: int):
+        """Simulate the Tello jump command shape."""
         self.go_xyz_speed_mid(x, y, z, speed, mid1)
         self._animate_to(yaw=self.drone["rot"] - yaw, speed=speed)
 
     def enable_mission_pads(self):
+        """Enable simulated mission pad detection."""
         self.send_control_command("mon")
 
     def disable_mission_pads(self):
+        """Disable simulated mission pad detection."""
         self.send_control_command("moff")
 
     def set_mission_pad_detection_direction(self, x):
+        """Set the simulated mission pad detection direction."""
         self.send_control_command(f"mdirection {x}")
 
     def set_speed(self, x: int):
+        """Set the drone speed in centimetres per second."""
         self.drone["speed"] = x
         self.send_control_command(f"speed {x}")
 
     def send_rc_control(self, left_right_velocity: int, forward_backward_velocity: int, up_down_velocity: int, yaw_velocity: int):
+        """Send joystick-style velocity controls to the drone."""
         def clamp100(value):
             return max(-100, min(100, value))
 
@@ -964,153 +1143,199 @@ class Tello:
         self.drone["pos"][0] += (forward_backward_velocity * math.sin(angle) + left_right_velocity * math.sin(angle + math.pi / 2)) * dt
         self.drone["pos"][1] += (forward_backward_velocity * math.cos(angle) + left_right_velocity * math.cos(angle + math.pi / 2)) * dt
         self.drone["pos"][2] = max(1.0, self.drone["pos"][2] + up_down_velocity * dt / 100)
-        self.drone["rot"] -= yaw_velocity * dt
+        self.drone["rot"] += yaw_velocity * dt
         self.drone["pitch"] = -forward_backward_velocity / 8
         self.drone["roll"] = left_right_velocity / 8
         self._render_frame()
         self._update_state()
 
     def set_wifi_credentials(self, ssid: str, password: str):
+        """Simulate setting the drone Wi-Fi credentials."""
         self.send_control_command(f"wifi {ssid} {password}")
 
     def connect_to_wifi(self, ssid: str, password: str):
+        """Simulate connecting the drone to a Wi-Fi network."""
         self.send_control_command(f"ap {ssid} {password}")
 
     def set_network_ports(self, state_packet_port: int, video_stream_port: int):
+        """Simulate setting state and video UDP ports."""
         self.send_control_command(f"port {state_packet_port} {video_stream_port}")
 
     def reboot(self):
+        """Simulate rebooting the drone."""
         self.send_command_without_return("reboot")
 
     def change_vs_udp(self, udp_port):
+        """Change the simulated video stream UDP port."""
         self.vs_udp_port = udp_port
         self.send_control_command(f"port 8890 {self.vs_udp_port}")
 
     def set_video_bitrate(self, bitrate: int):
+        """Set simulated video bitrate metadata."""
         self.send_control_command(f"setbitrate {bitrate}")
 
     def set_video_resolution(self, resolution: str):
+        """Set simulated video resolution metadata."""
         self.send_control_command(f"setresolution {resolution}")
 
     def set_video_fps(self, fps: str):
+        """Set simulated video frame-rate metadata."""
         self.send_control_command(f"setfps {fps}")
 
     def set_video_direction(self, direction: int):
+        """Set simulated video camera direction metadata."""
         self.send_control_command(f"downvision {direction}")
 
     def send_expansion_command(self, expansion_cmd: str):
+        """Send a simulated Tello Talent expansion command."""
         self.send_control_command(f"EXT {expansion_cmd}")
 
     def query_speed(self) -> int:
+        """Return the current speed setting."""
         return self.send_read_command_int("speed?")
 
     def query_battery(self) -> int:
+        """Return the simulated battery percentage."""
         return self.send_read_command_int("battery?")
 
     def query_flight_time(self) -> int:
+        """Return the simulated flight time in seconds."""
         return self.send_read_command_int("time?")
 
     def query_height(self) -> int:
+        """Return the simulated height in centimetres."""
         return self.send_read_command_int("height?")
 
     def query_temperature(self) -> int:
+        """Return the simulated temperature."""
         return self.send_read_command_int("temp?")
 
     def query_attitude(self) -> dict:
+        """Return pitch, roll, and yaw values."""
         return Tello.parse_state(self.send_read_command("attitude?"))
 
     def query_barometer(self) -> int:
+        """Return the simulated barometer value."""
         return self.send_read_command_int("baro?") * 100
 
     def query_distance_tof(self) -> float:
+        """Return the simulated time-of-flight distance."""
         tof = self.send_read_command("tof?")
         return int(tof[:-2]) / 10
 
     def query_wifi_signal_noise_ratio(self) -> str:
+        """Return simulated Wi-Fi signal information."""
         return self.send_read_command("wifi?")
 
     def query_sdk_version(self) -> str:
+        """Return the simulated SDK version."""
         return self.send_read_command("sdk?")
 
     def query_serial_number(self) -> str:
+        """Return the simulated serial number."""
         return self.send_read_command("sn?")
 
     def query_active(self) -> str:
+        """Return whether the simulated drone is active."""
         return self.send_read_command("active?")
 
     def get_udp_video_address(self) -> str:
+        """Return the simulated UDP video address."""
         return f"udp://@{self.VS_UDP_IP}:{self.vs_udp_port}"
 
     def get_frame_read(self, with_queue=False, max_queue_len=32) -> BackgroundFrameRead:
+        """Return a simulated BackgroundFrameRead object."""
         if self.background_frame_read is None:
             self.background_frame_read = BackgroundFrameRead(self, with_queue, max_queue_len)
             self.background_frame_read.start()
         return self.background_frame_read
 
     def get_mission_pad_id(self) -> int:
+        """Return the simulated mission pad id."""
         return self.get_state_field("mid")
 
     def get_mission_pad_distance_x(self) -> int:
+        """Return simulated mission pad x distance."""
         return self.get_state_field("x")
 
     def get_mission_pad_distance_y(self) -> int:
+        """Return simulated mission pad y distance."""
         return self.get_state_field("y")
 
     def get_mission_pad_distance_z(self) -> int:
+        """Return simulated mission pad z distance."""
         return self.get_state_field("z")
 
     def get_pitch(self) -> int:
+        """Return the latest pitch value."""
         return self.get_state_field("pitch")
 
     def get_roll(self) -> int:
+        """Return the latest roll value."""
         return self.get_state_field("roll")
 
     def get_yaw(self) -> int:
+        """Return the latest yaw value."""
         return self.get_state_field("yaw")
 
     def get_speed_x(self) -> int:
+        """Return the latest x speed."""
         return self.get_state_field("vgx")
 
     def get_speed_y(self) -> int:
+        """Return the latest y speed."""
         return self.get_state_field("vgy")
 
     def get_speed_z(self) -> int:
+        """Return the latest z speed."""
         return self.get_state_field("vgz")
 
     def get_acceleration_x(self) -> float:
+        """Return the latest x acceleration."""
         return self.get_state_field("agx")
 
     def get_acceleration_y(self) -> float:
+        """Return the latest y acceleration."""
         return self.get_state_field("agy")
 
     def get_acceleration_z(self) -> float:
+        """Return the latest z acceleration."""
         return self.get_state_field("agz")
 
     def get_lowest_temperature(self) -> int:
+        """Return the simulated lowest temperature."""
         return self.get_state_field("templ")
 
     def get_highest_temperature(self) -> int:
+        """Return the simulated highest temperature."""
         return self.get_state_field("temph")
 
     def get_temperature(self) -> float:
+        """Return the average simulated temperature."""
         return (self.get_lowest_temperature() + self.get_highest_temperature()) / 2
 
     def get_height(self) -> int:
+        """Return the simulated height in centimetres."""
         return self.get_state_field("h")
 
     def get_distance_tof(self) -> int:
+        """Return the simulated time-of-flight distance."""
         return self.get_state_field("tof")
 
     def get_barometer(self) -> int:
+        """Return the simulated barometer value."""
         return self.get_state_field("baro") * 100
 
     def get_flight_time(self) -> int:
+        """Return the simulated flight time in seconds."""
         return self.get_state_field("time")
 
     def get_battery(self) -> int:
+        """Return the simulated battery percentage."""
         return self.get_state_field("bat")
 
     def end(self):
+        """Use end in the simulator API."""
         try:
             if self.is_flying:
                 self.land(close_window=False)
@@ -1136,12 +1361,14 @@ class TelloSwarm:
 
     @staticmethod
     def fromFile(path: str):
+        """Create a TelloSwarm from a file of drone addresses."""
         with open(path, "r", encoding="utf-8") as fd:
             ips = fd.readlines()
         return TelloSwarm.fromIps(ips)
 
     @staticmethod
     def fromIps(ips: list):
+        """Create a TelloSwarm from a list of drone addresses."""
         if not ips:
             raise TelloException("No ips provided")
         tellos = [Tello(ip.strip(), swarm=True) for ip in ips]
@@ -1150,6 +1377,7 @@ class TelloSwarm:
         return TelloSwarm(tellos)
 
     def __init__(self, tellos: List[Tello]):
+        """Create and initialise this object."""
         self.tellos = tellos
         self.barrier = Barrier(len(tellos))
         self.funcBarrier = Barrier(len(tellos) + 1)
@@ -1175,25 +1403,30 @@ class TelloSwarm:
             self.simulation.render_frame(apply_wind=False)
 
     def sequential(self, func: Callable[[int, Tello], None]):
+        """Run a function on each swarm drone one after another."""
         for i, tello in enumerate(self.tellos):
             func(i, tello)
 
     def parallel(self, func: Callable[[int, Tello], None]):
+        """Run a function on all swarm drones in parallel."""
         for queue in self.funcQueues:
             queue.put(func)
         self.funcBarrier.wait()
         self.funcBarrier.wait()
 
     def sync(self, timeout: float = None):
+        """Wait for swarm threads to reach the same point."""
         return self.barrier.wait(timeout)
 
     def land(self):
+        """Land the drone and finish race timing."""
         for tello in self.tellos:
             tello.land(close_window=False)
         if self.simulation is not None:
             self.simulation.quit()
 
     def end(self):
+        """Use end in the simulator API."""
         for tello in self.tellos:
             tello.end()
         if self.simulation is not None:

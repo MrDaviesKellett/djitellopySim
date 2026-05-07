@@ -110,6 +110,16 @@ Race timing starts when the drone takes off and stops when it lands. Missing a
 gate adds 10 seconds. Flying through a later gate before the correct next gate
 adds 5 seconds.
 
+Students can ask the simulator for measurements before planning a movement:
+
+```python
+print(tello.measure_drone_to_gate(1))
+print(tello.measure_gate_to_gate(1, 2))
+```
+
+These measurements include distance and the angle relative to the current
+forward direction, which helps students decide how far to rotate and move.
+
 ## Simulator Window Keys
 
 The simulator shows the keymap on screen while it runs.
@@ -123,6 +133,7 @@ The simulator shows the keymap on screen while it runs.
 | `D` | Toggle distance hints |
 | `H` | Toggle height hints |
 | `R` | Toggle relative-position hints |
+| `V` | Toggle the drone forward vector |
 
 ## Expansion Kit
 
@@ -133,19 +144,19 @@ tello.send_expansion_command("led 255 0 0")
 tello.send_expansion_command(
     "mled " +
     "00000000"
-    "00111100"
-    "01111110"
-    "01111110"
-    "00111100"
-    "00011000"
+    "00rrrr00"
+    "0rppppr0"
+    "0rppppr0"
+    "00bbbb00"
+    "000bb000"
     "00000000"
     "00000000"
 )
 ```
 
 The top LED uses red, green, and blue values from 0 to 255. The matrix display
-is an 8 by 8 grid. In this simulator the matrix uses red and blue brightness,
-with no green channel.
+is an 8 by 8 grid. Use `0` for black, `r` for red, `b` for blue, and `p` for
+purple. There is no green matrix LED.
 
 ## Swarms
 

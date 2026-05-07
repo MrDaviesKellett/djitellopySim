@@ -1,2 +1,5 @@
+include README.md
+include QUICKSTART.md
+include API_REFERENCE.md
 include PARITY.md
 include requirements.txt

@@ -268,7 +268,7 @@ tello.send_rc_control(0, 40, 0, 0)
 
 Race gate functions are simulator only.
 
-### `setup_race_gates(count=5, course="line", seed=None)`
+### `setup_race_gates(count=5, course="line", seed=None, min_randomness=0, max_randomness=35)`
 
 Creates a race course.
 
@@ -276,9 +276,11 @@ Creates a race course.
 - `course` can be `"line"`, `"slalom"`, `"loop"`, `"climb"`, `"arches"`,
   `"mixed"`, or `"random"`.
 - `seed` makes a random course repeatable.
+- `min_randomness` and `max_randomness` control how much each gate is shifted
+  from the course template.
 
 ```python
-tello.setup_race_gates(count=6, course="loop", seed=12)
+tello.setup_race_gates(count=6, course="loop", seed=12, max_randomness=20)
 ```
 
 ### `clear_race_gates()`
@@ -306,19 +308,39 @@ Example result:
 
 ```python
 {
-    "number": 2,
-    "distance": 345.0,
-    "height_difference": 80.0,
-    "relative": {"x": 120.0, "y": 320.0, "z": 80.0},
+    "gate": 2,
+    "distance_cm": 345,
+    "flat_distance_cm": 334,
+    "angle_from_drone_forward_degrees": 15,
+    "relative_x_cm": 120,
+    "relative_y_cm": 320,
+    "relative_z_cm": 80,
 }
 ```
 
-### `set_race_hints(distance=None, height=None, relative=None)`
+### `measure_drone_to_gate(gate_id=None)`
+
+Measures from the drone to a race gate. If `gate_id` is not given, it measures
+to the next gate.
+
+The result includes distance, flat ground distance, relative x/y/z movement, and
+the angle from the drone's forward direction. Students can use this to plan a
+turn and then a `move_forward()` distance.
+
+### `measure_gate_to_gate(from_gate_id, to_gate_id=None)`
+
+Measures from one gate to another. If `to_gate_id` is not given, it measures to
+the next numbered gate.
+
+The result includes distance and the angle from the first gate's forward
+direction to the second gate.
+
+### `set_race_hints(distance=None, height=None, relative=None, forward=None)`
 
 Turns race-gate hints on or off in the simulator view.
 
 ```python
-tello.set_race_hints(distance=True, height=True, relative=False)
+tello.set_race_hints(distance=True, height=True, relative=False, forward=True)
 ```
 
 ### `get_race_time()`
@@ -332,7 +354,7 @@ print(tello.get_race_time())
 The result contains:
 
 - `running`: whether the timer is still running.
-- `raw_seconds`: time from takeoff to landing before penalties.
+- `elapsed_seconds`: time from takeoff to landing before penalties.
 - `penalty_seconds`: added penalty time.
 - `final_seconds`: raw time plus penalties.
 - `missed_gates`: number of gates not completed.
@@ -491,11 +513,11 @@ Set the 8 by 8 matrix LED:
 ```python
 pattern = (
     "00000000"
-    "00111100"
-    "01111110"
-    "01111110"
-    "00111100"
-    "00011000"
+    "00rrrr00"
+    "0rppppr0"
+    "0rppppr0"
+    "00bbbb00"
+    "000bb000"
     "00000000"
     "00000000"
 )
@@ -503,8 +525,8 @@ pattern = (
 tello.send_expansion_command("mled " + pattern)
 ```
 
-The matrix is shown above the drone. The simulator displays red and blue matrix
-brightness, not green.
+The matrix is shown above the drone. Use `0` for black, `r` for red, `b` for
+blue, and `p` for purple. There is no green matrix LED.
 
 ## State Queries
 
@@ -719,6 +741,7 @@ tello.send_control_command("cleargates")
 tello.send_control_command("racehints distance on")
 tello.send_control_command("racehints height off")
 tello.send_control_command("racehints relative on")
+tello.send_control_command("racehints forward on")
 tello.send_control_command("racehints off")
 tello.send_control_command("camerafollow on")
 tello.send_control_command("cameraoverview")
@@ -728,7 +751,7 @@ Expansion commands:
 
 ```python
 tello.send_control_command("EXT led 255 0 0")
-tello.send_control_command("EXT mled 0000000000111100011111100111111000111100000110000000000000000000")
+tello.send_control_command("EXT mled 0000000000rrrr000rppppr00rppppr000bbbb00000bb000000000000000000")
 ```
 
 Read commands:
