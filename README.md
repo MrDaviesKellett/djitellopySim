@@ -101,10 +101,28 @@ Course types are:
 - `line`
 - `slalom`
 - `loop`
+- `oval`
 - `climb`
 - `arches`
 - `mixed`
 - `random`
+
+You can place the drone before a flight:
+
+```python
+tello = Tello(start_position=(500, 400, 0))
+tello.takeoff(position=(500, 400, 0))
+```
+
+The first two numbers are floor coordinates in centimetres. The third number is
+height above the floor in centimetres.
+
+You can also place the first gate and let the rest of the course follow from
+there:
+
+```python
+tello.setup_race_gates(count=6, course="oval", seed=7, first_gate_position=(1000, 800, 180))
+```
 
 Race timing starts when the drone takes off and stops when it lands. Missing a
 gate adds 10 seconds. Flying through a later gate before the correct next gate
@@ -134,6 +152,7 @@ The simulator shows the keymap on screen while it runs.
 | `H` | Toggle height hints |
 | `R` | Toggle relative-position hints |
 | `V` | Toggle the drone forward vector |
+| `M` | Toggle X/Y/Z measurement overlay |
 
 ## Expansion Kit
 

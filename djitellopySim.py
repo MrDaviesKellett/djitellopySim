@@ -128,9 +128,18 @@ class Tello:
     state_field_converters: Dict[str, Union[type, type]] = {key: int for key in INT_STATE_FIELDS}
     state_field_converters.update({key: float for key in FLOAT_STATE_FIELDS})
 
-    def __init__(self, host=TELLO_IP, retry_count=RETRY_COUNT, vs_udp=VS_UDP_PORT, swarm=False, start_visual=True):
+    def __init__(
+        self,
+        host=TELLO_IP,
+        retry_count=RETRY_COUNT,
+        vs_udp=VS_UDP_PORT,
+        swarm=False,
+        start_visual=True,
+        start_position=None,
+    ):
         """Create and initialise this object."""
         global SIMULATION
+        initial_pos = self._sim_position_from_user_position(start_position) if start_position is not None else [500.0, 400.0, 1.0]
         self.flightPathTaken = []
         self.address = (host, Tello.CONTROL_UDP_PORT)
         self.retry_count = retry_count
@@ -147,7 +156,7 @@ class Tello:
         self._motors_on = False
         self._start_time = None
         self._last_state_update = time.time()
-        self._last_pos = [500.0, 400.0, 1.0]
+        self._last_pos = list(initial_pos)
 
         if SIMULATION is None and start_visual:
             SIMULATION = sim()
@@ -155,7 +164,7 @@ class Tello:
 
         self.drone = {
             "scl": 0.08,
-            "pos": [500.0, 400.0, 1.0],
+            "pos": list(initial_pos),
             "rot": 0.0,
             "pitch": 0.0,
             "roll": 0.0,
@@ -179,8 +188,8 @@ class Tello:
             "race_gates": [],
             "race_next_gate": 0,
             "race_completed": False,
-            "race_last_pos": [500.0, 400.0, 1.0],
-            "race_hints": {"distance": True, "height": False, "relative": False, "forward": False},
+            "race_last_pos": list(initial_pos),
+            "race_hints": {"distance": True, "height": False, "relative": False, "forward": False, "measure": False},
             "race_timer_start": None,
             "race_elapsed_seconds": 0.0,
             "race_penalty_seconds": 0.0,
@@ -197,6 +206,38 @@ class Tello:
         if self.simulation is not None:
             self.simulation.register(self)
             self._render_frame(apply_wind=False)
+
+    @staticmethod
+    def _sim_position_from_user_position(position=None, x=None, y=None, z=None):
+        if position is not None:
+            if len(position) == 2:
+                x, y = position
+                z = 0 if z is None else z
+            else:
+                x, y, z = position
+        if x is None or y is None:
+            raise TelloException("A position needs x and y values.")
+        z = 0 if z is None else z
+        return [float(x), float(y), 1.0 + float(z) / 100.0]
+
+    @staticmethod
+    def _sim_position_from_gate_position(position, current_z):
+        if len(position) == 2:
+            x, y = position
+            return [float(x), float(y), current_z]
+        x, y, z = position
+        return [float(x), float(y), 1.0 + float(z) / 100.0]
+
+    def set_position(self, x=None, y=None, z=None, position=None):
+        """Place the drone at a simulator position before flight starts."""
+        if self.is_flying:
+            raise TelloException("Cannot place the drone while it is flying.")
+        self.drone["pos"] = self._sim_position_from_user_position(position, x, y, z)
+        self._last_pos = list(self.drone["pos"])
+        self.drone["race_last_pos"] = list(self.drone["pos"])
+        self.flightPathTaken = []
+        self._update_state()
+        self._render_frame(apply_wind=False)
 
     def _setSwarmPos(self, i):
         self.drone["pos"][0] += -260 + 130 * (i % 4)
@@ -224,6 +265,7 @@ class Tello:
         seed: Optional[int] = None,
         min_randomness: float = 0,
         max_randomness: float = 35,
+        first_gate_position=None,
     ):
         """Create a flyable race-gate course and return the generated gates."""
         if isinstance(course, int) and seed is None:
@@ -234,8 +276,8 @@ class Tello:
         start = self.drone["pos"]
         course = str(course).lower()
         if course == "random":
-            course = rng.choice(["line", "slalom", "loop", "climb", "arches", "mixed"])
-        if course not in {"line", "slalom", "loop", "climb", "arches", "mixed"}:
+            course = rng.choice(["line", "slalom", "loop", "climb", "arches", "mixed", "oval"])
+        if course not in {"line", "slalom", "loop", "climb", "arches", "mixed", "oval"}:
             course = "line"
 
         gates = []
@@ -246,6 +288,12 @@ class Tello:
             gates = self._generate_race_course(count, course, rng, start, min_randomness, max_randomness)
             if self._race_course_max_turn_degrees(gates) <= RACE_MAX_TURN_DEGREES:
                 break
+
+        if first_gate_position is not None and gates:
+            first_pos = self._sim_position_from_gate_position(first_gate_position, gates[0]["pos"][2])
+            offset = [first_pos[axis] - gates[0]["pos"][axis] for axis in range(3)]
+            for gate in gates:
+                gate["pos"] = [gate["pos"][axis] + offset[axis] for axis in range(3)]
 
         self._align_gate_yaws_to_course(gates)
 
@@ -267,6 +315,7 @@ class Tello:
             "climb": [(430, -100), (860, 80), (1290, -80), (1720, 105), (2150, -50), (2580, 120), (3010, 0), (3440, 80)],
             "arches": [(760, 0), (1520, 0), (2280, 0), (3040, 0), (3800, 220), (4560, 220), (5320, 40), (6080, -180)],
             "mixed": [(520, -170), (1040, 160), (1660, -150), (2240, 170), (2860, -80), (3440, 220), (4060, 0), (4640, -170)],
+            "oval": [(430, 0), (710, 280), (430, 560), (0, 700), (-430, 560), (-710, 280), (-430, 0), (0, -140), (430, 0), (710, 280)],
         }
         offsets = templates[course]
         course_yaw = math.radians(self.drone["rot"])
@@ -294,7 +343,9 @@ class Tello:
             y = start[1] + forward * forward_y + right * right_y + jitter
             heading = math.atan2(x - previous[0], y - previous[1])
 
-            if gate_type == "arch":
+            if course == "oval":
+                z = max(2.65, min(3.15, base_z + rng.uniform(-0.1, 0.1)))
+            elif gate_type == "arch":
                 z = 1.0
             elif course == "climb":
                 z = 2.7 + (index % 5) * 0.22
@@ -375,10 +426,12 @@ class Tello:
         height: Optional[bool] = None,
         relative: Optional[bool] = None,
         forward: Optional[bool] = None,
+        measure: Optional[bool] = None,
     ):
         """Show or hide in-view race hints such as distance, height, and heading."""
         hints = dict(self.drone.get("race_hints", {}))
-        for key, value in {"distance": distance, "height": height, "relative": relative, "forward": forward}.items():
+        values = {"distance": distance, "height": height, "relative": relative, "forward": forward, "measure": measure}
+        for key, value in values.items():
             if value is not None:
                 hints[key] = bool(value)
         self.drone["race_hints"] = hints
@@ -729,7 +782,11 @@ class Tello:
             if op == "command":
                 self._connected = True
             elif op == "takeoff":
-                self.takeoff()
+                if len(parts) >= 3:
+                    z = float(parts[3]) if len(parts) > 3 else None
+                    self.takeoff(position=(float(parts[1]), float(parts[2]), z) if z is not None else (float(parts[1]), float(parts[2])))
+                else:
+                    self.takeoff()
             elif op == "land":
                 self.land(close_window=False)
             elif op in {"up", "down", "left", "right", "forward", "back"}:
@@ -799,7 +856,13 @@ class Tello:
                     min_randomness = float(parts[4])
                 if len(parts) > 5:
                     max_randomness = float(parts[5])
-                self.setup_race_gates(count, course, seed, min_randomness, max_randomness)
+                first_gate_position = None
+                if len(parts) > 7:
+                    if len(parts) > 8:
+                        first_gate_position = (float(parts[6]), float(parts[7]), float(parts[8]))
+                    else:
+                        first_gate_position = (float(parts[6]), float(parts[7]))
+                self.setup_race_gates(count, course, seed, min_randomness, max_randomness, first_gate_position)
             elif op == "cleargates":
                 self.clear_race_gates()
             elif op == "racehints":
@@ -885,10 +948,12 @@ class Tello:
         """Start simulated throw takeoff mode."""
         self.send_control_command("throwfly")
 
-    def takeoff(self):
+    def takeoff(self, x=None, y=None, z=None, position=None):
         """Take off and start race timing when gates are present."""
         if self.is_flying:
             return
+        if position is not None or x is not None or y is not None:
+            self.set_position(x, y, z, position)
         self.LOGGER.info("sending takeoff command to drone")
         self._simulate_latency()
         self._animate_to(z=1.8, speed=max(self.drone["speed"], 100))
@@ -974,11 +1039,11 @@ class Tello:
             target_x -= x * math.sin(angle_rad)
             target_y -= x * math.cos(angle_rad)
         elif direction == "left":
-            target_x += x * math.sin(angle_rad - math.pi / 2)
-            target_y += x * math.cos(angle_rad - math.pi / 2)
-        elif direction == "right":
             target_x += x * math.sin(angle_rad + math.pi / 2)
             target_y += x * math.cos(angle_rad + math.pi / 2)
+        elif direction == "right":
+            target_x += x * math.sin(angle_rad - math.pi / 2)
+            target_y += x * math.cos(angle_rad - math.pi / 2)
         elif direction == "up":
             target_z += x / 100
         elif direction == "down":
@@ -1072,8 +1137,8 @@ class Tello:
         """Move by relative x, y, z centimetres at the given speed."""
         self._require_flying()
         angle = math.radians(self.drone["rot"])
-        dx = y * math.sin(angle) + x * math.sin(angle + math.pi / 2)
-        dy = y * math.cos(angle) + x * math.cos(angle + math.pi / 2)
+        dx = y * math.sin(angle) + x * math.sin(angle - math.pi / 2)
+        dy = y * math.cos(angle) + x * math.cos(angle - math.pi / 2)
         self._animate_to(self.drone["pos"][0] + dx, self.drone["pos"][1] + dy, self.drone["pos"][2] + z / 100, speed=speed)
 
     def _go_command(self, parts):
@@ -1140,8 +1205,8 @@ class Tello:
             return
         dt = 0.1
         angle = math.radians(self.drone["rot"])
-        self.drone["pos"][0] += (forward_backward_velocity * math.sin(angle) + left_right_velocity * math.sin(angle + math.pi / 2)) * dt
-        self.drone["pos"][1] += (forward_backward_velocity * math.cos(angle) + left_right_velocity * math.cos(angle + math.pi / 2)) * dt
+        self.drone["pos"][0] += (forward_backward_velocity * math.sin(angle) + left_right_velocity * math.sin(angle - math.pi / 2)) * dt
+        self.drone["pos"][1] += (forward_backward_velocity * math.cos(angle) + left_right_velocity * math.cos(angle - math.pi / 2)) * dt
         self.drone["pos"][2] = max(1.0, self.drone["pos"][2] + up_down_velocity * dt / 100)
         self.drone["rot"] += yaw_velocity * dt
         self.drone["pitch"] = -forward_backward_velocity / 8

@@ -66,6 +66,15 @@ tello.move_forward(100)
 tello.land()
 ```
 
+You can also choose where the drone starts:
+
+```python
+tello = Tello(start_position=(500, 400, 0))
+```
+
+The first two numbers are floor coordinates in centimetres. The third number is
+height above the floor in centimetres.
+
 ## 4. Run It
 
 In the terminal, run:
@@ -182,7 +191,7 @@ from djitellopySim import Tello
 tello = Tello()
 tello.connect()
 
-tello.setup_race_gates(count=5, course="line", seed=3)
+tello.setup_race_gates(count=5, course="oval", seed=3, first_gate_position=(1000, 700, 180))
 tello.set_camera_overview()
 tello.set_race_hints(distance=True, height=True, relative=True, forward=True)
 
@@ -255,6 +264,7 @@ In the simulator window:
 | `H` | Show or hide height hints |
 | `R` | Show or hide relative-position hints |
 | `V` | Show or hide the drone forward vector |
+| `M` | Show or hide the X/Y/Z measurement overlay |
 
 ## 11. Expansion LED And Matrix LED
 

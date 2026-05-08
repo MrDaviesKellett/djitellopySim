@@ -30,7 +30,7 @@ from djitellopySim import Tello, TelloSwarm, TelloException
 tello = Tello()
 ```
 
-### `Tello(host=TELLO_IP, retry_count=RETRY_COUNT, vs_udp=VS_UDP_PORT, swarm=False, start_visual=True)`
+### `Tello(host=TELLO_IP, retry_count=RETRY_COUNT, vs_udp=VS_UDP_PORT, swarm=False, start_visual=True, start_position=None)`
 
 Creates a simulated drone.
 
@@ -40,12 +40,28 @@ Creates a simulated drone.
 - `vs_udp` is the video stream UDP port setting.
 - `swarm=True` tells the simulator this drone is part of a swarm.
 - `start_visual=False` creates the drone without opening the visual window.
+- `start_position=(x, y, z)` places the drone before the flight starts. `x` and
+  `y` are floor coordinates in centimetres. `z` is height above the floor in
+  centimetres.
 
 Example:
 
 ```python
 tello = Tello()
+tello_at_start = Tello(start_position=(500, 400, 0))
 ```
+
+### `set_position(x=None, y=None, z=None, position=None)`
+
+Places the drone before it starts flying.
+
+```python
+tello.set_position(500, 400, 0)
+tello.set_position(position=(500, 400, 0))
+```
+
+Use this before `takeoff()`. The simulator raises an error if you try to place
+the drone while it is already flying.
 
 ## Connection And Lifecycle
 
@@ -96,12 +112,13 @@ Simulates throw takeoff mode.
 
 ## Basic Flight
 
-### `takeoff()`
+### `takeoff(x=None, y=None, z=None, position=None)`
 
 Makes the drone take off. Race timing starts here.
 
 ```python
 tello.takeoff()
+tello.takeoff(position=(500, 400, 0))
 ```
 
 ### `land(close_window=True)`
@@ -255,7 +272,7 @@ Simulates the Tello `jump` command shape.
 
 Sends joystick-style control values.
 
-- Positive left/right moves right.
+- Positive left/right moves left.
 - Positive forward/back moves forward.
 - Positive up/down moves up.
 - Positive yaw turns clockwise.
@@ -268,19 +285,22 @@ tello.send_rc_control(0, 40, 0, 0)
 
 Race gate functions are simulator only.
 
-### `setup_race_gates(count=5, course="line", seed=None, min_randomness=0, max_randomness=35)`
+### `setup_race_gates(count=5, course="line", seed=None, min_randomness=0, max_randomness=35, first_gate_position=None)`
 
 Creates a race course.
 
 - `count` is the number of gates.
 - `course` can be `"line"`, `"slalom"`, `"loop"`, `"climb"`, `"arches"`,
-  `"mixed"`, or `"random"`.
+  `"mixed"`, `"oval"`, or `"random"`.
 - `seed` makes a random course repeatable.
 - `min_randomness` and `max_randomness` control how much each gate is shifted
   from the course template.
+- `first_gate_position=(x, y, z)` places the first gate. `x` and `y` are floor
+  coordinates in centimetres. `z` is gate height in centimetres.
 
 ```python
 tello.setup_race_gates(count=6, course="loop", seed=12, max_randomness=20)
+tello.setup_race_gates(count=6, course="oval", seed=12, first_gate_position=(1000, 800, 180))
 ```
 
 ### `clear_race_gates()`
@@ -335,12 +355,12 @@ the next numbered gate.
 The result includes distance and the angle from the first gate's forward
 direction to the second gate.
 
-### `set_race_hints(distance=None, height=None, relative=None, forward=None)`
+### `set_race_hints(distance=None, height=None, relative=None, forward=None, measure=None)`
 
 Turns race-gate hints on or off in the simulator view.
 
 ```python
-tello.set_race_hints(distance=True, height=True, relative=False, forward=True)
+tello.set_race_hints(distance=True, height=True, relative=False, forward=True, measure=True)
 ```
 
 ### `get_race_time()`
@@ -726,6 +746,7 @@ Common real Tello-style commands:
 
 ```python
 tello.send_control_command("takeoff")
+tello.send_control_command("takeoff 500 400 0")
 tello.send_control_command("forward 100")
 tello.send_control_command("cw 90")
 tello.send_control_command("flip l")
@@ -737,11 +758,13 @@ Simulator-only commands:
 ```python
 tello.send_control_command("racegates 5 slalom")
 tello.send_control_command("racegates 6 loop 12")
+tello.send_control_command("racegates 6 oval 12 0 20 1000 800 180")
 tello.send_control_command("cleargates")
 tello.send_control_command("racehints distance on")
 tello.send_control_command("racehints height off")
 tello.send_control_command("racehints relative on")
 tello.send_control_command("racehints forward on")
+tello.send_control_command("racehints measure on")
 tello.send_control_command("racehints off")
 tello.send_control_command("camerafollow on")
 tello.send_control_command("cameraoverview")

@@ -68,6 +68,9 @@ class sim:
         elif self.tellos and key == pygame.K_v:
             hints = self.tellos[0].drone.get("race_hints", {})
             hints["forward"] = not hints.get("forward", False)
+        elif self.tellos and key == pygame.K_m:
+            hints = self.tellos[0].drone.get("race_hints", {})
+            hints["measure"] = not hints.get("measure", False)
         elif self.tellos and key in {pygame.K_d, pygame.K_h, pygame.K_r}:
             hints = self.tellos[0].drone.get("race_hints", {})
             if key == pygame.K_d:
@@ -329,6 +332,61 @@ class sim:
         pygame.draw.rect(self.screen, (66, 78, 91), bg, 1, border_radius=3)
         self.screen.blit(rendered, (x, y))
 
+    def _draw_label(self, text, pos, color=(226, 232, 240), bg=(8, 12, 16)):
+        font = pygame.font.Font(None, 20)
+        rendered = font.render(text, True, color)
+        rect = pygame.Rect(int(pos[0] - rendered.get_width() / 2 - 5), int(pos[1] - rendered.get_height() / 2 - 3), rendered.get_width() + 10, rendered.get_height() + 6)
+        pygame.draw.rect(self.screen, bg, rect, border_radius=3)
+        pygame.draw.rect(self.screen, (66, 78, 91), rect, 1, border_radius=3)
+        self.screen.blit(rendered, (rect.x + 5, rect.y + 3))
+
+    def _draw_gate_height_indicators(self, tello):
+        if not tello.drone.get("race_hints", {}).get("measure"):
+            return
+        for gate in tello.drone.get("race_gates", []):
+            x, y, z = gate["pos"]
+            top = self._world_to_screen(x, y, z)
+            ground = self._world_to_screen(x, y, 0)
+            pygame.draw.line(self.screen, (125, 211, 252), ground, top, 2)
+            pygame.draw.circle(self.screen, (125, 211, 252), (int(top[0]), int(top[1])), 4)
+            mid = ((top[0] + ground[0]) / 2 + 22, (top[1] + ground[1]) / 2)
+            height_cm = int(round((z - 1.0) * 100))
+            self._draw_label(f"Z {height_cm} cm", mid, color=(224, 242, 254))
+
+    def _draw_measurement_overlay(self, tello):
+        hints = tello.drone.get("race_hints", {})
+        if not hints.get("measure"):
+            return
+        gate = tello.get_next_race_gate()
+        if gate is None:
+            return
+
+        drone = tello.drone["pos"]
+        gate_pos = gate["pos"]
+        corner = [gate_pos[0], drone[1], 0]
+        drone_floor = [drone[0], drone[1], 0]
+        gate_floor = [gate_pos[0], gate_pos[1], 0]
+        drone_screen = self._world_to_screen(*drone_floor)
+        corner_screen = self._world_to_screen(*corner)
+        gate_screen = self._world_to_screen(*gate_floor)
+
+        x_cm = int(round(gate_pos[0] - drone[0]))
+        y_cm = int(round(gate_pos[1] - drone[1]))
+        z_cm = int(round((gate_pos[2] - drone[2]) * 100))
+
+        pygame.draw.line(self.screen, (248, 113, 113), drone_screen, corner_screen, 4)
+        pygame.draw.line(self.screen, (96, 165, 250), corner_screen, gate_screen, 4)
+        pygame.draw.line(self.screen, (226, 232, 240), drone_screen, gate_screen, 1)
+        pygame.draw.circle(self.screen, (248, 250, 252), (int(drone_screen[0]), int(drone_screen[1])), 4)
+        pygame.draw.circle(self.screen, (248, 250, 252), (int(gate_screen[0]), int(gate_screen[1])), 4)
+
+        self._draw_label(f"X {x_cm:+d} cm", ((drone_screen[0] + corner_screen[0]) / 2, (drone_screen[1] + corner_screen[1]) / 2 - 18), color=(254, 226, 226))
+        self._draw_label(f"Y {y_cm:+d} cm", ((corner_screen[0] + gate_screen[0]) / 2, (corner_screen[1] + gate_screen[1]) / 2 - 18), color=(219, 234, 254))
+
+        gate_top = self._world_to_screen(gate_pos[0], gate_pos[1], gate_pos[2])
+        pygame.draw.line(self.screen, (125, 211, 252), gate_screen, gate_top, 3)
+        self._draw_label(f"dZ {z_cm:+d} cm", (gate_top[0] + 36, (gate_top[1] + gate_screen[1]) / 2), color=(224, 242, 254))
+
     def _draw_race_gates(self, tello, layer="full"):
         gates = tello.drone.get("race_gates", [])
         next_gate = tello.drone.get("race_next_gate", 0)
@@ -347,6 +405,7 @@ class sim:
             "H height hint",
             "R relative hint",
             "V forward vector",
+            "M measure axes",
             "K hide keys",
         ]
         rendered = [font.render(line, True, (214, 222, 232)) for line in lines]
@@ -386,7 +445,7 @@ class sim:
 
     def _project_drone_points(self, tello):
         pos = tello.drone["pos"]
-        yaw = math.radians(tello.drone["rot"])
+        yaw = -math.radians(tello.drone["rot"])
         flip_frames = tello.drone.get("flip", 0)
         flip_direction = tello.drone.get("flip_direction", "b")
         flip_angle = ((24 - flip_frames) / 24) * math.tau if flip_frames > 0 else 0
@@ -524,13 +583,14 @@ class sim:
             pygame.draw.line(self.screen, (248, 250, 252), start, end, 3)
             pygame.draw.circle(self.screen, (248, 250, 252), (int(end[0]), int(end[1])), 5)
 
-        top = self._world_to_screen(pos[0], pos[1], pos[2])
-        ground = self._world_to_screen(pos[0], pos[1], 0)
-        pygame.draw.line(self.screen, ALTITUDE_COLOR, (top[0] - 40, top[1]), (ground[0] - 40, ground[1]), 2)
-        height_cm = int(max(0, (pos[2] - 1.0) * 100))
-        font = pygame.font.Font(None, 22)
-        label = font.render(f"{height_cm} cm", True, ALTITUDE_COLOR)
-        self.screen.blit(label, (top[0] - 30, top[1] - 24))
+        if tello.drone.get("race_hints", {}).get("measure"):
+            top = self._world_to_screen(pos[0], pos[1], pos[2])
+            ground = self._world_to_screen(pos[0], pos[1], 0)
+            pygame.draw.line(self.screen, ALTITUDE_COLOR, top, ground, 2)
+            height_cm = int(max(0, (pos[2] - 1.0) * 100))
+            font = pygame.font.Font(None, 22)
+            label = font.render(f"{height_cm} cm", True, ALTITUDE_COLOR)
+            self.screen.blit(label, (top[0] + 8, top[1] - 10))
 
     def _draw_race_summary_popup(self, tello):
         if not tello.drone.get("race_show_summary"):
@@ -607,6 +667,8 @@ class sim:
             self._draw_race_curve(tello)
             self._draw_race_gates(tello, layer="shadow")
             self._draw_race_gates(tello, layer="lower")
+            self._draw_measurement_overlay(tello)
+            self._draw_gate_height_indicators(tello)
 
             tello.flightPathTaken.append(tuple(tello.drone["pos"]))
             if len(tello.flightPathTaken) > 2000:
